@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pizarreada</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            overscroll-behavior: none; /* Prevents pull-to-refresh on mobile */
+        }
+        .screen {
+            display: none; /* Hidden by default */
+            min-height: 100vh; /* Full viewport height */
+        }
+        .screen.active {
+            display: flex; /* Show active screen */
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        /* Custom scrollbar for chat */
+        .chat-messages::-webkit-scrollbar {
+            width: 8px;
+        }
+        .chat-messages::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 10px;
+        }
+        .chat-messages::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 10px;
+        }
+        .chat-messages::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+        /* Basic button styling for user selection */
+        .user-button {
+            transition: background-color 0.3s ease;
+        }
+        .user-button.selected {
+            background-color: #3b82f6; /* Tailwind's blue-500 */
+            color: white;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-slate-900 to-slate-800 text-white antialiased">
+
+    <div id="password-screen" class="screen active p-4">
+        <div class="bg-slate-700 p-6 sm:p-8 rounded-xl shadow-2xl w-full max-w-md text-center">
+            <h1 class="text-3xl sm:text-4xl font-bold mb-6 text-sky-400">Pizarreada</h1>
+            <p class="mb-2 text-slate-300">Ingresa la contraseña para unirte:</p>
+            <input type="password" id="password-input" class="w-full p-3 mb-4 bg-slate-800 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 outline-none" placeholder="Contraseña">
+            <button id="password-submit" class="w-full bg-sky-500 hover:bg-sky-600 text-white font-semibold p-3 rounded-lg transition duration-200 ease-in-out transform hover:scale-105">
+                Ingresar
+            </button>
+            <p id="password-error" class="text-red-400 mt-4 text-sm">&nbsp;</p> </div>
+    </div>
+
+    <div id="user-selection-screen" class="screen p-4">
+        <div class="bg-slate-700 p-6 sm:p-8 rounded-xl shadow-2xl w-full max-w-lg text-center">
+            <h2 class="text-2xl sm:text-3xl font-bold mb-6 text-sky-400">¿Quién eres?</h2>
+            <div id="user-list" class="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6 max-h-72 overflow-y-auto pr-2">
+                </div>
+            <button id="user-select-submit" class="w-full bg-green-500 hover:bg-green-600 text-white font-semibold p-3 rounded-lg transition duration-200 ease-in-out transform hover:scale-105" disabled>
+                Confirmar Identidad
+            </button>
+            <p id="user-select-error" class="text-red-400 mt-4 text-sm">&nbsp;</p>
+        </div>
+    </div>
+
+    <div id="lobby-screen" class="screen p-4">
+        <div class="bg-slate-700 p-6 rounded-xl shadow-2xl w-full max-w-2xl flex flex-col h-[90vh] sm:h-auto sm:max-h-[90vh]">
+            <h2 class="text-2xl sm:text-3xl font-bold mb-2 text-sky-400 text-center">Sala de Espera</h2>
+            <p class="text-center text-slate-300 mb-1">Bienvenido/a, <span id="lobby-username" class="font-semibold text-sky-300"></span>!</p>
+            <p class="text-center text-slate-400 text-sm mb-4">Jugadores listos: <span id="ready-count">0</span>/<span id="total-players-lobby">1</span></p>
+
+            <div class="flex-grow flex flex-col sm:flex-row gap-4 overflow-hidden">
+                <div class="sm:w-1/3 bg-slate-800 p-4 rounded-lg">
+                    <h3 class="font-semibold mb-2 text-lg text-sky-400">Conectados:</h3>
+                    <ul id="connected-users-list" class="space-y-1 text-slate-300 text-sm">
+                        </ul>
+                </div>
+
+                <div class="sm:w-2/3 flex flex-col bg-slate-800 p-4 rounded-lg">
+                    <h3 class="font-semibold mb-2 text-lg text-sky-400">Chat del Lobby</h3>
+                    <div id="chat-messages" class="chat-messages flex-grow bg-slate-900 p-3 rounded-md overflow-y-auto mb-3 h-48 sm:h-auto border border-slate-600">
+                        </div>
+                    <div class="flex gap-2">
+                        <input type="text" id="chat-input" class="flex-grow p-2 bg-slate-600 border border-slate-500 rounded-lg text-white focus:ring-1 focus:ring-sky-500 outline-none" placeholder="Escribe un mensaje...">
+                        <button id="chat-send" class="bg-sky-500 hover:bg-sky-600 text-white font-semibold px-4 py-2 rounded-lg transition duration-150">Enviar</button>
+                    </div>
+                </div>
+            </div>
+            <button id="start-game-button" class="w-full mt-6 bg-orange-500 hover:bg-orange-600 text-white font-bold p-3 rounded-lg transition duration-200 ease-in-out transform hover:scale-105">
+                ¡Comenzar Partida!
+            </button>
+             <p id="lobby-message" class="text-center text-yellow-400 mt-3 text-sm">&nbsp;</p>
+        </div>
+    </div>
+
+    <div id="game-screen" class="screen p-4">
+        <div class="bg-slate-700 p-8 rounded-xl shadow-2xl w-full max-w-4xl text-center">
+            <h1 class="text-4xl font-bold mb-6 text-green-400">¡Partida Iniciada!</h1>
+            <p class="text-xl text-slate-300">Aquí estará el lienzo y el juego.</p>
+            <p class="mt-4 text-slate-400">Usuario: <span id="game-username" class="font-semibold text-green-300"></span></p>
+            <button id="back-to-lobby-button" class="mt-8 bg-sky-500 hover:bg-sky-600 text-white font-semibold p-3 rounded-lg transition duration-200">
+                Volver al Lobby (Temporal)
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // --- Application State ---
+        let currentScreen = 'password-screen';
+        let selectedUser = null;
+        let selectedUserButton = null; // To track the selected button for styling
+        const UNIVERSAL_PASSWORD = "comunidad";
+        const users = [
+            "Frodo", "Arwen", "Gandalf", "Galadriel", "Aragorn", "Sam", "Gimli", 
+            "Pippin", "Merry", "Legolas", "Saruman", "Elrond", "Boromir", "Bilbo"
+        ];
+        // Simulate other players and their ready status for lobby
+        // In a real app, this would come from a server.
+        let connectedPlayers = []; // Will store objects like { name: 'User', ready: false }
+        let localUserReady = false;
+
+        // --- DOM Elements ---
+        const screens = {
+            password: document.getElementById('password-screen'),
+            userSelection: document.getElementById('user-selection-screen'),
+            lobby: document.getElementById('lobby-screen'),
+            game: document.getElementById('game-screen')
+        };
+        const passwordInput = document.getElementById('password-input');
+        const passwordSubmit = document.getElementById('password-submit');
+        const passwordError = document.getElementById('password-error');
+
+        const userListDiv = document.getElementById('user-list');
+        const userSelectSubmit = document.getElementById('user-select-submit');
+        const userSelectError = document.getElementById('user-select-error');
+        
+        const lobbyUsername = document.getElementById('lobby-username');
+        const chatMessages = document.getElementById('chat-messages');
+        const chatInput = document.getElementById('chat-input');
+        const chatSend = document.getElementById('chat-send');
+        const startGameButton = document.getElementById('start-game-button');
+        const readyCountSpan = document.getElementById('ready-count');
+        const totalPlayersLobbySpan = document.getElementById('total-players-lobby');
+        const connectedUsersListUl = document.getElementById('connected-users-list');
+        const lobbyMessage = document.getElementById('lobby-message');
+
+        const gameUsername = document.getElementById('game-username');
+        const backToLobbyButton = document.getElementById('back-to-lobby-button');
+
+        // --- Functions ---
+        function navigateTo(screenId) {
+            Object.values(screens).forEach(screen => screen.classList.remove('active'));
+            screens[screenId].classList.add('active');
+            currentScreen = screenId;
+            console.log(`Navigated to ${screenId}`);
+        }
+
+        function displayPasswordError(message) {
+            passwordError.textContent = message;
+        }
+        function displayUserSelectError(message) {
+            userSelectError.textContent = message;
+        }
+
+        function populateUserList() {
+            users.forEach(user => {
+                const button = document.createElement('button');
+                button.textContent = user;
+                button.classList.add('user-button', 'w-full', 'text-sm', 'sm:text-base', 'bg-slate-600', 'hover:bg-slate-500', 'text-white', 'font-medium', 'py-2', 'px-3', 'rounded-lg', 'transition', 'duration-150');
+                button.dataset.username = user;
+                button.addEventListener('click', () => {
+                    if (selectedUserButton) {
+                        selectedUserButton.classList.remove('selected', 'bg-sky-500');
+                        selectedUserButton.classList.add('bg-slate-600', 'hover:bg-slate-500');
+                    }
+                    selectedUser = user;
+                    selectedUserButton = button;
+                    button.classList.add('selected', 'bg-sky-500');
+                    button.classList.remove('bg-slate-600', 'hover:bg-slate-500');
+                    userSelectSubmit.disabled = false;
+                    userSelectError.textContent = '';
+                });
+                userListDiv.appendChild(button);
+            });
+        }
+
+        function handlePasswordSubmit() {
+            if (passwordInput.value === UNIVERSAL_PASSWORD) {
+                displayPasswordError('');
+                navigateTo('userSelection');
+            } else {
+                displayPasswordError('Contraseña incorrecta. Intenta de nuevo.');
+                passwordInput.value = '';
+                passwordInput.focus();
+            }
+        }
+
+        function handleUserSelectSubmit() {
+            if (selectedUser) {
+                displayUserSelectError('');
+                lobbyUsername.textContent = selectedUser;
+                // Simulate this user joining
+                connectedPlayers = [{ name: selectedUser, ready: false }]; 
+                // Simulate other players (for non-Gandalf scenarios)
+                if (selectedUser !== "Gandalf") {
+                    // Add a couple of dummy players for testing lobby counts
+                    // In a real app, this would be dynamic
+                    if (!users.find(u => u === "Invitado X")) connectedPlayers.push({ name: "Invitado X", ready: Math.random() > 0.5 });
+                    if (!users.find(u => u === "Invitado Y")) connectedPlayers.push({ name: "Invitado Y", ready: Math.random() > 0.5 });
+                }
+                updateLobbyUI();
+                navigateTo('lobby');
+            } else {
+                displayUserSelectError('Por favor, selecciona un usuario.');
+            }
+        }
+        
+        function addChatMessage(user, message, isSystem = false) {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('mb-1.5', 'text-sm');
+            if (isSystem) {
+                messageElement.classList.add('text-amber-400', 'italic');
+                messageElement.textContent = message;
+            } else {
+                messageElement.classList.add('text-slate-200');
+                const userSpan = document.createElement('span');
+                userSpan.classList.add('font-semibold', selectedUser === user ? 'text-sky-300' : 'text-pink-400');
+                userSpan.textContent = `${user}: `;
+                messageElement.appendChild(userSpan);
+                messageElement.append(document.createTextNode(message));
+            }
+            chatMessages.appendChild(messageElement);
+            chatMessages.scrollTop = chatMessages.scrollHeight; // Auto-scroll to bottom
+        }
+
+        function handleChatSend() {
+            const message = chatInput.value.trim();
+            if (message && selectedUser) {
+                addChatMessage(selectedUser, message);
+                chatInput.value = '';
+                // In a real app, send this message to the server
+            }
+            chatInput.focus();
+        }
+
+        function updateLobbyUI() {
+            // Update connected users list
+            connectedUsersListUl.innerHTML = ''; // Clear existing list
+            connectedPlayers.forEach(player => {
+                const li = document.createElement('li');
+                li.textContent = `${player.name} ${player.ready ? '✔️' : '⏳'}`;
+                if (player.name === selectedUser) {
+                    li.classList.add('font-bold', 'text-sky-300');
+                }
+                connectedUsersListUl.appendChild(li);
+            });
+
+            // Update ready counts
+            const currentReadyCount = connectedPlayers.filter(p => p.ready).length;
+            readyCountSpan.textContent = currentReadyCount;
+            totalPlayersLobbySpan.textContent = connectedPlayers.length;
+
+            // Enable/Disable start button
+            if (selectedUser === "Gandalf") {
+                startGameButton.disabled = false;
+                lobbyMessage.textContent = "Modo desarrollador: Puedes iniciar solo.";
+            } else {
+                const allReady = connectedPlayers.length > 0 && currentReadyCount === connectedPlayers.length;
+                startGameButton.disabled = !allReady;
+                if (allReady) {
+                    lobbyMessage.textContent = "¡Todos listos! Presiona comenzar.";
+                } else {
+                    lobbyMessage.textContent = "Esperando a que todos los jugadores estén listos...";
+                }
+            }
+        }
+
+        function handleStartGame() {
+            // If user is Gandalf, can start alone (dev mode)
+            if (selectedUser === "Gandalf") {
+                gameUsername.textContent = selectedUser;
+                navigateTo('game');
+                addChatMessage(null, `${selectedUser} ha iniciado la partida en modo desarrollador.`, true);
+                return;
+            }
+
+            // For other users, check if they are the one marked as ready
+            const localPlayerEntry = connectedPlayers.find(p => p.name === selectedUser);
+            if (localPlayerEntry && !localPlayerEntry.ready) {
+                localPlayerEntry.ready = true;
+                localUserReady = true;
+                startGameButton.textContent = "¡Listo!";
+                startGameButton.classList.remove('bg-orange-500', 'hover:bg-orange-600');
+                startGameButton.classList.add('bg-teal-500', 'cursor-not-allowed');
+                startGameButton.disabled = true; // Disable after clicking ready
+                addChatMessage(null, `${selectedUser} está listo/a.`, true);
+            }
+            
+            updateLobbyUI(); // Update counts and potentially enable start for others if all ready
+
+            // Check if all players are ready (simulated)
+            const allPlayersReady = connectedPlayers.every(p => p.ready);
+            if (allPlayersReady && connectedPlayers.length > 0) {
+                 // Only navigate if this client is part of the ready group
+                if (localUserReady || connectedPlayers.find(p => p.name === selectedUser)?.ready) {
+                    gameUsername.textContent = selectedUser;
+                    navigateTo('game');
+                    addChatMessage(null, `¡Todos listos! Iniciando partida...`, true);
+                }
+            }
+        }
+
+        // --- Event Listeners ---
+        document.addEventListener('DOMContentLoaded', () => {
+            populateUserList();
+            navigateTo('password'); // Start at password screen
+            passwordInput.focus();
+        });
+
+        passwordSubmit.addEventListener('click', handlePasswordSubmit);
+        passwordInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') handlePasswordSubmit();
+        });
+
+        userSelectSubmit.addEventListener('click', handleUserSelectSubmit);
+
+        chatSend.addEventListener('click', handleChatSend);
+        chatInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') handleChatSend();
+        });
+
+        startGameButton.addEventListener('click', handleStartGame);
+        
+        backToLobbyButton.addEventListener('click', () => {
+            // Reset local ready state if going back
+            localUserReady = false;
+            const localPlayerEntry = connectedPlayers.find(p => p.name === selectedUser);
+            if (localPlayerEntry) {
+                localPlayerEntry.ready = false; // User is no longer ready
+            }
+            startGameButton.textContent = "¡Comenzar Partida!";
+            startGameButton.classList.remove('bg-teal-500', 'cursor-not-allowed');
+            startGameButton.classList.add('bg-orange-500', 'hover:bg-orange-600');
+            // startGameButton.disabled = false; // Re-enable based on logic in updateLobbyUI
+            updateLobbyUI();
+            navigateTo('lobby');
+        });
+
+    </script>
+</body>
+</html>

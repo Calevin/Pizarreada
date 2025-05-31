@@ -103,6 +103,23 @@ type DrawingPhaseStartPayload struct {
 	Duration       int    `json:"duration"`             // Duration in seconds to draw
 }
 
+// DrawActionPayload for canvas drawing actions.
+type DrawActionPayload struct {
+	Action   string  `json:"action"` // "start", "draw", "end", "clear", "controlChange"
+	X        float64 `json:"x,omitempty"`
+	Y        float64 `json:"y,omitempty"`
+	FromX    float64 `json:"fromX,omitempty"`
+	FromY    float64 `json:"fromY,omitempty"`
+	ToX      float64 `json:"toX,omitempty"`
+	ToY      float64 `json:"toY,omitempty"`
+	Color    string  `json:"color,omitempty"`
+	Size     float64 `json:"size,omitempty"`
+	IsEraser bool    `json:"isEraser,omitempty"`
+	Control  string  `json:"control,omitempty"`  // e.g., "color", "brushSize", "eraser"
+	Value    string  `json:"value,omitempty"`    // For control changes, e.g. color hex, size string
+	Username string  `json:"username,omitempty"` // Username of the dibujante performing the action
+}
+
 func newGameState() *GameState {
 	return &GameState{
 		gameInProgress:     false,
@@ -243,7 +260,7 @@ func (h *Hub) startGame() {
 	})
 
 	h.gameState.playerOrder = readyPlayers
-	h.gameState.currentPlayerIndex = 0
+	h.gameState.currentPlayerIndex = -1 // It will be incremented to 0 on assignNextDrawer the first time
 	h.gameState.gameInProgress = true
 	log.Printf("Juego iniciado. Orden de jugadores: %v", getPlayerUsernames(h.gameState.playerOrder))
 
@@ -270,13 +287,12 @@ func (h *Hub) assignNextDrawer() {
 		h.broadcastGameEnd("No hay jugadores para continuar.")
 		return
 	}
-
-	// Logic for rotating turns (simplified, may need more for rounds)
-	// h.gameState.currentPlayerIndex = (h.gameState.currentPlayerIndex + 1) % len(h.gameState.playerOrder)
+	h.gameState.currentPlayerIndex++ // Move to next
 	if h.gameState.currentPlayerIndex >= len(h.gameState.playerOrder) {
 		log.Println("Todos los jugadores han dibujado en esta ronda. Fin de ronda/juego.")
 		h.gameState.gameInProgress = false
 		h.broadcastGameEnd("Ronda completada.")
+		// TODO: Lógica para nueva ronda o fin de juego total
 		return
 	}
 
@@ -284,6 +300,7 @@ func (h *Hub) assignNextDrawer() {
 	drawerClient.mu.Lock()
 	h.gameState.currentDrawerUsername = drawerClient.username
 	drawerClient.mu.Unlock()
+	h.gameState.currentWord = "" // Resetear palabra actual
 
 	log.Printf("Asignando dibujante: %s", h.gameState.currentDrawerUsername)
 
@@ -298,7 +315,14 @@ func (h *Hub) assignNextDrawer() {
 	drawerPayloadBytes, _ := json.Marshal(drawerPayload)
 	drawerMsg := Message{Type: "assignDrawerAndWords", Payload: drawerPayloadBytes}
 	drawerMsgBytes, _ := json.Marshal(drawerMsg)
-	drawerClient.send <- drawerMsgBytes
+
+	// Send only to the drawing client
+	select {
+	case drawerClient.send <- drawerMsgBytes:
+		log.Printf("Mensaje assignDrawerAndWords enviado a %s", drawerClient.username)
+	default:
+		log.Printf("Error al enviar assignDrawerAndWords a %s: canal bloqueado", drawerClient.username)
+	}
 
 	// Send the message to other players (adivinadores)
 	guesserPayload := AssignDrawerPayload{DrawerUsername: h.gameState.currentDrawerUsername} // Without WordsToChoose
@@ -309,14 +333,16 @@ func (h *Hub) assignNextDrawer() {
 	h.mu.Lock() // Block hub to iterate on clients
 	for client := range h.clients {
 		if client != drawerClient {
-			client.send <- guesserMsgBytes
+			select {
+			case client.send <- guesserMsgBytes:
+			default:
+				log.Printf("Error al enviar assignDrawerAndWords (guesser) a %s: canal bloqueado", client.username)
+			}
 		}
 	}
 	h.mu.Unlock()
-	h.gameState.currentPlayerIndex++ // Move to next for next time
 }
 
-// getRandomWords returns a list of random words.
 func (h *Hub) getRandomWords(count int) []string {
 	if len(h.gameWords) == 0 {
 		return []string{"default1", "default2", "default3"} // Fallback
@@ -460,13 +486,9 @@ func (c *Client) readPump() {
 					cl.mu.Unlock()
 				}
 				c.hub.mu.Unlock()
-
-				if numIdentified == 1 { // Gandalf es el único jugador identificado
-					log.Printf("Gandalf (solo y listo) solicitó iniciar el juego.")
+				if numIdentified >= 1 { // Gandalf puede iniciar si hay al menos 1 (él mismo)
+					log.Printf("Gandalf (listo) solicitó iniciar el juego. Jugadores identificados: %d", numIdentified)
 					c.hub.startGame()
-				} else {
-					c.hub.startGame()
-					log.Printf("Gandalf solicitó iniciar, pero hay otros jugadores. Se requiere que todos estén listos.")
 				}
 			}
 
@@ -520,7 +542,56 @@ func (c *Client) readPump() {
 			}
 			c.hub.gameState.mu.Unlock()
 
-		// TODO: Manejar 'drawingData', 'guessAttempt', 'clearCanvas', etc.
+		case "drawAction":
+			c.hub.gameState.mu.Lock()
+			// Only the current dibujante can submit drawing actions.
+			if c.username == c.hub.gameState.currentDrawerUsername && c.hub.gameState.gameInProgress {
+				// Repackage the message to ensure the type is correct and add username if necessary
+
+				// Extract the original payload from DrawActionPayload
+				var drawPayload DrawActionPayload
+				if err := json.Unmarshal(msg.Payload, &drawPayload); err != nil {
+					log.Printf("Error al decodificar DrawActionPayload: %v", err)
+					c.hub.gameState.mu.Unlock()
+					continue
+				}
+				drawPayload.Username = c.username // Ensure the dibujante's username is in the payload
+
+				// Re-serialize the payload
+				enrichedPayloadBytes, err := json.Marshal(drawPayload)
+				if err != nil {
+					log.Printf("Error al re-serializar DrawActionPayload enriquecido: %v", err)
+					c.hub.gameState.mu.Unlock()
+					continue
+				}
+
+				// Create the final message for broadcast
+				drawMsg := Message{Type: "drawAction", Payload: enrichedPayloadBytes}
+				drawMsgBytes, err := json.Marshal(drawMsg)
+				if err != nil {
+					log.Printf("Error al serializar mensaje drawAction final: %v", err)
+					c.hub.gameState.mu.Unlock()
+					continue
+				}
+
+				// Broadcast to all clients (including the artist, so everyone sees the same thing)
+				c.hub.mu.Lock()
+				for clientItem := range c.hub.clients {
+					// if clientItem != c { // Opción: no enviar de vuelta al dibujante
+					select {
+					case clientItem.send <- drawMsgBytes:
+					default:
+						log.Printf("Canal de envío bloqueado para %s al retransmitir drawAction", clientItem.username)
+					}
+					// }
+				}
+				c.hub.mu.Unlock()
+
+			} else {
+				log.Printf("Usuario %s intentó enviar drawAction pero no es el dibujante (%s) o juego no activo.", c.username, c.hub.gameState.currentDrawerUsername)
+			}
+			c.hub.gameState.mu.Unlock()
+
 		default:
 			log.Printf("Tipo de mensaje desconocido de %s: %s", c.username, msg.Type)
 		}
@@ -549,7 +620,6 @@ func (c *Client) writePump() {
 				log.Printf("Error de escritura de WebSocket para %s: %v", c.username, err)
 				return
 			}
-			log.Printf("Mensaje enviado a %s: %s", c.username, string(message))
 
 			// case <-ticker.C: // Periodic ping
 			// 	c.conn.SetWriteDeadline(time.Now().Add(writeWait))
@@ -586,8 +656,7 @@ func main() {
 
 	port := "8080"
 	log.Printf("Servidor WebSocket Pizarreada escuchando en el puerto %s", port)
-	err := http.ListenAndServe(":"+port, nil)
-	if err != nil {
+	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
 }

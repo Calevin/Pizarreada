@@ -210,8 +210,8 @@
 
     // Canvas state
     let canvas, ctx;
-    let drawing = false;
-    let lastX, lastY;
+    let drawing = false; // Local drawing state for the drawer
+    let lastX, lastY; // Local last coordinates for the drawer
     let currentBrushColor = '#000000';
     let currentBrushSize = 3;
     let isEraserActive = false;
@@ -317,7 +317,7 @@
     }
 
     function handleServerMessage(message) {
-        console.log("[CLIENT] Received message from server:", message); // Log para depuración
+        console.log("[CLIENT] Received message from server:", message);
         switch (message.type) {
             case "userListUpdate":
                 connectedPlayersFromServer = message.payload.users || [];
@@ -333,7 +333,6 @@
             case "assignDrawerAndWords":
                 console.log("[CLIENT] assignDrawerAndWords payload:", message.payload);
                 currentDrawer = message.payload.drawerUsername;
-                // No añadir mensaje al chat del lobby aquí. initTurn lo hará en el chat del juego.
                 initTurn(message.payload.wordsToChoose || []);
                 break;
             case "drawingPhaseStart":
@@ -341,15 +340,13 @@
                 currentDrawer = message.payload.drawerUsername;
                 const drawingDuration = message.payload.duration || 90;
 
-                // Asegurarse que estamos en la pantalla de juego
                 if (currentScreen !== 'game') {
                     console.warn("Received drawingPhaseStart but not in game screen. Navigating...");
-                    navigateTo('game'); // Forzar navegación si no estaba ya
+                    navigateTo('game');
                 }
 
-                gameChatMessages.innerHTML = ''; // Limpiar chat del juego para el nuevo turno
+                gameChatMessages.innerHTML = '';
                 addChatMessage(gameChatMessages, null, `El juego ha comenzado. ${currentDrawer} va a dibujar.`, true);
-
 
                 if (selectedUser === currentDrawer) {
                     currentChosenWord = message.payload.wordToDraw;
@@ -367,7 +364,12 @@
                 wordSelectionArea.classList.add('hidden');
                 startTimer(drawingDuration, gameTimerSpan, () => {
                     addChatMessage(gameChatMessages, null, `¡Tiempo de dibujar ha terminado para ${currentDrawer}!`, true);
+                    // Server will send gameEnded or newTurn
                 }, "s");
+                break;
+            case "drawAction":
+                console.log("[CLIENT] drawAction payload:", message.payload);
+                applyDrawAction(message.payload);
                 break;
             case "gameEnded":
                 addChatMessage(gameChatMessages, null, `Juego terminado: ${message.payload.reason}`, true);
@@ -384,7 +386,7 @@
 
     // --- Utility Functions ---
     function navigateTo(screenId) {
-        console.log(`[CLIENT] Navigating to screen: ${screenId}`); // Log para depuración
+        console.log(`[CLIENT] Navigating to screen: ${screenId}`);
         Object.values(screens).forEach(screen => screen.classList.remove('active'));
         if (screens[screenId]) screens[screenId].classList.add('active');
         else console.error(`Screen with id ${screenId} not found!`);
@@ -578,11 +580,7 @@
 
     function initTurn(wordsToChooseByServer = []) {
         console.log(`[CLIENT] initTurn called. Current drawer: ${currentDrawer}, Selected user: ${selectedUser}`);
-        navigateTo('game'); // Navegar PRIMERO
-
-        gameChatMessages.innerHTML = ''; // Limpiar chat del juego para el nuevo turno
-        // El mensaje de inicio de turno se gestionará en drawingPhaseStart o aquí si es necesario antes.
-        // addChatMessage(gameChatMessages, null, `El juego ha comenzado. ${currentDrawer} va a dibujar.`, true); // Movido a drawingPhaseStart
+        navigateTo('game');
 
         gameCurrentDrawerSpan.textContent = currentDrawer || "Nadie";
         chosenWordDisplay.textContent = "";
@@ -593,10 +591,9 @@
         turnEndMessageDiv.classList.add('hidden');
         turnEndMessageDiv.textContent = '';
         playersWhoGuessedThisTurn = [];
-        clearCanvasFull();
+        clearCanvasFull(); // Limpiar lienzo para el nuevo turno
 
         if (selectedUser === currentDrawer) {
-            // Los controles de dibujo se mostrarán en drawingPhaseStart
             wordSelectionArea.classList.remove('hidden');
             chosenWordDisplay.textContent = "Eligiendo...";
             wordChoicesDiv.innerHTML = '';
@@ -610,10 +607,12 @@
                     wordChoicesDiv.appendChild(button);
                 });
                 startTimer(20, wordSelectTimerSpan, () => {
-                    if (wordChoicesDiv.children.length > 0 && !currentChosenWord && selectedUser === currentDrawer) {
-                        const randomWord = wordsToChooseByServer[Math.floor(Math.random() * wordsToChooseByServer.length)];
-                        handleWordSelectedByDrawer(randomWord); // El dibujante elige, envía al servidor
-                        // El servidor enviará drawingPhaseStart, no añadir mensaje de palabra aquí
+                    if (wordChoicesDiv.children.length > 0 && selectedUser === currentDrawer) {
+                        const activeButtons = Array.from(wordChoicesDiv.children).filter(btn => !btn.disabled);
+                        if (activeButtons.length > 0) {
+                            const randomWord = wordsToChooseByServer[Math.floor(Math.random() * wordsToChooseByServer.length)];
+                            handleWordSelectedByDrawer(randomWord);
+                        }
                     }
                 }, "s restantes");
             } else {
@@ -625,49 +624,26 @@
             wordSelectionArea.classList.add('hidden');
             chosenWordDisplay.textContent = "Adivina...";
             gameChatInput.disabled = false;
-            // El mensaje de "X está eligiendo" se gestionará en drawingPhaseStart o aquí.
-            // Por ahora, se añade en drawingPhaseStart para asegurar que el drawer esté definido.
         }
         updateScoresDisplay();
     }
 
     function handleWordSelectedByDrawer(word) {
         clearTimeout(wordSelectionTimerId);
+        Array.from(wordChoicesDiv.children).forEach(btn => btn.disabled = true);
         sendWsMessage("wordChosenByDrawer", { username: selectedUser, chosenWord: word });
-        wordSelectionArea.classList.add('hidden');
         chosenWordDisplay.textContent = "Palabra enviada...";
     }
 
     function handleCorrectGuess(playerName) {
-        if (selectedUser === "Gandalf" && currentDrawer === "Gandalf") {
-            if (!currentChosenWord || playersWhoGuessedThisTurn.includes(playerName)) return;
-            playersWhoGuessedThisTurn.push(playerName);
-            const guesserPoints = 1;
-            playerScores[playerName] = (playerScores[playerName] || 0) + guesserPoints;
-            if (currentDrawer) playerScores[currentDrawer] = (playerScores[currentDrawer] || 0) + 1;
-            addChatMessage(gameChatMessages, null, `¡"${playerName}" ha adivinado la palabra! (+${guesserPoints} puntos)`, true, true);
-            updateScoresDisplay();
-            if (playerName === selectedUser) {
-                gameChatInput.disabled = true;
-                gameChatInput.placeholder = "¡Adivinaste!";
-            }
-            endTurn();
-        }
+        console.warn("handleCorrectGuess es local y será reemplazada por lógica del servidor.");
     }
 
     function endTurn() {
+        console.warn("endTurn es local y será reemplazada por lógica del servidor.");
         drawingCanvas.classList.add('opacity-50', 'pointer-events-none');
         gameChatInput.disabled = true;
         gameChatInput.placeholder = "Turno terminado.";
-        if (selectedUser === "Gandalf" && currentDrawer === "Gandalf") {
-            addChatMessage(gameChatMessages, null, "Preparando para el siguiente turno...", true);
-            setTimeout(() => {
-                if (currentScreen === 'game') {
-                    currentChosenWord = null;
-                    sendWsMessage("requestNextTurn", {});
-                }
-            }, 5000);
-        }
     }
 
     function startTimer(duration, displayElement, onEndCallback, suffix = "s") {
@@ -709,13 +685,87 @@
 
         if(ws && ws.readyState === WebSocket.OPEN && selectedUser) {
             sendWsMessage("playerReady", { username: selectedUser, isReady: false });
+            if (currentScreen === 'game') sendWsMessage("playerLeaveGame", {username: selectedUser});
         }
-        // No cerrar el WS aquí, solo marcar como no listo. El usuario puede querer seguir en el lobby.
-        // Si el juego terminó (mensaje gameEnded), el servidor podría manejar la lógica de resetear el estado del juego.
         navigateTo('lobby');
     }
 
     // --- Canvas Drawing Logic ---
+    function applyDrawAction(payload) {
+        if (!ctx) return; // Asegurarse que el contexto del canvas existe
+
+        // Si la acción es del dibujante actual Y este cliente es el dibujante,
+        // NO aplicar acciones de trazado (start, draw, end) porque ya se hicieron localmente.
+        // Sí aplicar 'clear' y 'controlChange' para mantener la UI de controles sincronizada.
+        if (payload.username === selectedUser && selectedUser === currentDrawer) {
+            if (payload.action === "start" || payload.action === "draw" || payload.action === "end") {
+                // console.log(`[CLIENT ${selectedUser}] Ignorando eco de mi propia acción de trazado: ${payload.action}`);
+                return;
+            }
+        }
+
+        // Aplicar estilos del payload ANTES de la acción de dibujo
+        ctx.strokeStyle = payload.isEraser ? CANVAS_BACKGROUND_COLOR : payload.color;
+        ctx.lineWidth = payload.size;
+        ctx.lineCap = 'round'; // Asegurar consistencia
+        ctx.lineJoin = 'round'; // Asegurar consistencia
+        ctx.globalCompositeOperation = 'source-over'; // Resetear para dibujo normal/borrado
+
+        switch (payload.action) {
+            case "start":
+                ctx.beginPath();
+                ctx.moveTo(payload.x, payload.y);
+                break;
+            case "draw":
+                // Para los adivinadores (o si el dibujante tuviera que resincronizar),
+                // cada acción "draw" es un segmento.
+                ctx.beginPath(); // Iniciar un nuevo path para este segmento
+                ctx.moveTo(payload.fromX, payload.fromY);
+                ctx.lineTo(payload.toX, payload.toY);
+                ctx.stroke();
+                break;
+            case "end":
+                // No se necesita una acción específica en el canvas para "end" si cada "draw" es un segmento.
+                break;
+            case "clear":
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                // Si es el dibujante quien recibe su propio eco de "clear", resetear sus herramientas locales
+                if (payload.username === selectedUser && selectedUser === currentDrawer) {
+                    isEraserActive = false;
+                    currentBrushColor = '#000000';
+                    currentBrushSize = parseFloat(brushSizeSlider.value) || 3; // Mantener tamaño o resetear
+                    eraserButton.classList.remove('active');
+                    const blackButton = document.querySelector('#color-palette .color-button[data-color="#000000"]');
+                    if (blackButton) updateActiveColorButton(blackButton);
+                }
+                break;
+            case "controlChange":
+                // El dibujante ya actualizó su estado localmente.
+                // Los adivinadores no necesitan cambiar su 'currentBrushColor' local, etc.
+                // El canvas de los adivinadores se actualizará con los datos de 'color', 'size', 'isEraser'
+                // que vienen con cada acción 'start' o 'draw'.
+                // Si el dibujante recibe esto, puede ser para re-sincronizar sus controles de UI si fuera necesario.
+                if (payload.username === selectedUser && selectedUser === currentDrawer) {
+                    if (payload.control === "color") {
+                        isEraserActive = payload.isEraser;
+                        currentBrushColor = payload.color; // El payload.color es el color resultante
+                        eraserButton.classList.toggle('active', isEraserActive);
+                        updateActiveColorButton(isEraserActive ? null : document.querySelector(`#color-palette .color-button[data-color="${payload.color}"]`));
+                    } else if (payload.control === "eraser") { // Este es el caso cuando se hace clic en el botón de goma
+                        isEraserActive = payload.isEraser; // payload.value sería "true" o "false"
+                        currentBrushColor = payload.color; // Sería CANVAS_BACKGROUND_COLOR si isEraser es true
+                        eraserButton.classList.toggle('active', isEraserActive);
+                        updateActiveColorButton(isEraserActive ? null : document.querySelector(`#color-palette .color-button[data-color="${currentBrushColor}"]`));
+                    } else if (payload.control === "brushSize") {
+                        currentBrushSize = payload.size;
+                        brushSizeSlider.value = currentBrushSize;
+                    }
+                }
+                break;
+        }
+    }
+
+
     function initCanvas() {
         canvas = drawingCanvas; ctx = canvas.getContext('2d');
         ctx.strokeStyle = currentBrushColor; ctx.lineWidth = currentBrushSize;
@@ -738,24 +788,36 @@
             if (color === currentBrushColor && !isEraserActive) button.classList.add('active');
             button.addEventListener('click', () => {
                 if (selectedUser !== currentDrawer) return;
-                isEraserActive = false; currentBrushColor = color; ctx.strokeStyle = currentBrushColor;
-                ctx.globalCompositeOperation = 'source-over'; eraserButton.classList.remove('active');
+                isEraserActive = false; currentBrushColor = color;
+                // ctx.strokeStyle = currentBrushColor; // Se aplica en start/draw
+                // ctx.globalCompositeOperation = 'source-over';
+                eraserButton.classList.remove('active');
                 updateActiveColorButton(button);
+                sendWsMessage("drawAction", { action: "controlChange", control: "color", value: color, isEraser: false, color: currentBrushColor, size: currentBrushSize });
             });
             colorPaletteDiv.appendChild(button);
         });
         eraserButton.addEventListener('click', () => {
             if (selectedUser !== currentDrawer) return;
-            isEraserActive = true; ctx.strokeStyle = CANVAS_BACKGROUND_COLOR;
-            ctx.globalCompositeOperation = 'source-over'; eraserButton.classList.add('active');
+            isEraserActive = true;
+            // currentBrushColor = CANVAS_BACKGROUND_COLOR; // No cambiar currentBrushColor, solo el efecto
+            // ctx.strokeStyle = CANVAS_BACKGROUND_COLOR;
+            // ctx.globalCompositeOperation = 'source-over';
+            eraserButton.classList.add('active');
             updateActiveColorButton(null);
+            sendWsMessage("drawAction", { action: "controlChange", control: "eraser", value: "true", isEraser: true, color: CANVAS_BACKGROUND_COLOR, size: currentBrushSize });
         });
         clearCanvasButton.addEventListener('click', () => {
-            if (selectedUser === currentDrawer) clearCanvasFull();
+            if (selectedUser === currentDrawer) {
+                clearCanvasFull(); // Limpia localmente
+                sendWsMessage("drawAction", { action: "clear", color: currentBrushColor, size: currentBrushSize, isEraser: isEraserActive }); // Enviar estado actual de herramienta
+            }
         });
         brushSizeSlider.addEventListener('input', (e) => {
             if (selectedUser !== currentDrawer) { e.target.value = currentBrushSize; return; }
-            currentBrushSize = e.target.value; ctx.lineWidth = currentBrushSize;
+            currentBrushSize = parseFloat(e.target.value);
+            // ctx.lineWidth = currentBrushSize; // Se aplica en start/draw
+            sendWsMessage("drawAction", { action: "controlChange", control: "brushSize", value: currentBrushSize.toString(), size: currentBrushSize, color: currentBrushColor, isEraser: isEraserActive });
         });
         drawingControlsDiv.classList.add('hidden');
     }
@@ -771,46 +833,68 @@
         const rect = canvas.getBoundingClientRect();
         return { x: evt.touches[0].clientX - rect.left, y: evt.touches[0].clientY - rect.top };
     }
-    function startDrawing(e) {
+    function startDrawing(e) { // Drawer's local action
         if (e.buttons !== 1 || selectedUser !== currentDrawer || currentScreen !== 'game' || drawingCanvas.classList.contains('pointer-events-none')) return;
-        drawing = true; const pos = getMousePos(e); [lastX, lastY] = [pos.x, pos.y];
+        drawing = true; const pos = getMousePos(e);
+        [lastX, lastY] = [pos.x, pos.y];
+        ctx.beginPath();
+        ctx.moveTo(lastX, lastY); // Dibujar localmente
+        sendWsMessage("drawAction", { action: "start", x: pos.x, y: pos.y, color: currentBrushColor, size: currentBrushSize, isEraser: isEraserActive });
     }
-    function draw(e) {
+    function draw(e) { // Drawer's local action
         if (!drawing || e.buttons !== 1 || selectedUser !== currentDrawer || currentScreen !== 'game' || drawingCanvas.classList.contains('pointer-events-none')) return;
-        const pos = getMousePos(e); ctx.beginPath();
-        ctx.moveTo(lastX, lastY); ctx.lineTo(pos.x, pos.y);
+        const pos = getMousePos(e);
         ctx.lineWidth = currentBrushSize;
         ctx.strokeStyle = isEraserActive ? CANVAS_BACKGROUND_COLOR : currentBrushColor;
-        ctx.stroke();
-        [lastX, lastY] = [pos.x, pos.y];
+        ctx.lineTo(pos.x, pos.y); // Dibujar localmente
+        ctx.stroke(); // Dibujar localmente
+
+        sendWsMessage("drawAction", { action: "draw", fromX: lastX, fromY: lastY, toX: pos.x, toY: pos.y, color: currentBrushColor, size: currentBrushSize, isEraser: isEraserActive });
+        lastX = pos.x; lastY = pos.y; // Actualizar lastX, lastY después de enviar
     }
-    function stopDrawing() {
-        if (drawing) drawing = false;
+    function stopDrawing() { // Drawer's local action
+        if (drawing) {
+            drawing = false;
+            ctx.beginPath(); // Finalizar el path actual para que el siguiente sea nuevo
+            sendWsMessage("drawAction", { action: "end", color: currentBrushColor, size: currentBrushSize, isEraser: isEraserActive });
+        }
     }
-    function startDrawingTouch(e) {
+    function startDrawingTouch(e) { // Drawer's local action
         if (selectedUser !== currentDrawer || currentScreen !== 'game' || drawingCanvas.classList.contains('pointer-events-none')) return;
-        e.preventDefault(); drawing = true; const pos = getTouchPos(e); [lastX, lastY] = [pos.x, pos.y];
+        e.preventDefault(); drawing = true; const pos = getTouchPos(e);
+        [lastX, lastY] = [pos.x, pos.y];
+        ctx.beginPath(); ctx.moveTo(lastX, lastY);
+        sendWsMessage("drawAction", { action: "start", x: pos.x, y: pos.y, color: currentBrushColor, size: currentBrushSize, isEraser: isEraserActive });
     }
-    function drawTouch(e) {
+    function drawTouch(e) { // Drawer's local action
         if (!drawing || selectedUser !== currentDrawer || currentScreen !== 'game' || drawingCanvas.classList.contains('pointer-events-none')) return;
-        e.preventDefault(); const pos = getTouchPos(e); ctx.beginPath();
-        ctx.moveTo(lastX, lastY); ctx.lineTo(pos.x, pos.y);
+        e.preventDefault(); const pos = getTouchPos(e);
         ctx.lineWidth = currentBrushSize;
         ctx.strokeStyle = isEraserActive ? CANVAS_BACKGROUND_COLOR : currentBrushColor;
+        ctx.lineTo(pos.x, pos.y);
         ctx.stroke();
-        [lastX, lastY] = [pos.x, pos.y];
+        sendWsMessage("drawAction", { action: "draw", fromX: lastX, fromY: lastY, toX: pos.x, toY: pos.y, color: currentBrushColor, size: currentBrushSize, isEraser: isEraserActive });
+        lastX = pos.x; lastY = pos.y;
     }
-    function stopDrawingTouch() {
-        if (drawing) drawing = false;
+    function stopDrawingTouch() { // Drawer's local action
+        if (drawing) {
+            drawing = false;
+            ctx.beginPath();
+            sendWsMessage("drawAction", { action: "end", color: currentBrushColor, size: currentBrushSize, isEraser: isEraserActive });
+        }
     }
     function clearCanvasFull() {
-        if (selectedUser !== currentDrawer) return;
+        if (selectedUser !== currentDrawer && currentScreen === 'game') return; // Solo el dibujante puede limpiar explícitamente
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        isEraserActive = false; currentBrushColor = '#000000'; ctx.strokeStyle = currentBrushColor;
-        ctx.globalCompositeOperation = 'source-over'; eraserButton.classList.remove('active');
-        const blackButton = document.querySelector('#color-palette .color-button[data-color="#000000"]');
-        if (blackButton) updateActiveColorButton(blackButton);
-        else if (colorPaletteDiv.firstChild) updateActiveColorButton(colorPaletteDiv.firstChild);
+        if (selectedUser === currentDrawer) { // Si es el dibujante, resetear sus herramientas también
+            isEraserActive = false; currentBrushColor = '#000000';
+            // currentBrushSize ya está seteado, o usa el valor del slider
+            eraserButton.classList.remove('active');
+            const blackButton = document.querySelector('#color-palette .color-button[data-color="#000000"]');
+            if (blackButton) updateActiveColorButton(blackButton);
+            else if (colorPaletteDiv.firstChild) updateActiveColorButton(colorPaletteDiv.firstChild);
+        }
+        // El mensaje "clear" al servidor ya se envía desde el listener del botón
     }
 </script>
 </body>

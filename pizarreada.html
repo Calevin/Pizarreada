@@ -81,6 +81,14 @@
         .score-entry.highlight {
             background-color: #2563eb; /* blue-600 */
         }
+        #game-over-screen ul li {
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.375rem; /* rounded-md */
+        }
+        #game-over-screen ul li:nth-child(1) { background-color: #c084fcAA; } /* purple-400 with alpha */
+        #game-over-screen ul li:nth-child(2) { background-color: #a78bfaAA; } /* violet-400 with alpha */
+        #game-over-screen ul li:nth-child(3) { background-color: #7c3aedAA; } /* violet-600 with alpha */
+
     </style>
 </head>
 <body class="bg-gradient-to-br from-slate-900 to-slate-800 text-white antialiased">
@@ -187,6 +195,20 @@
     </div>
 </div>
 
+<div id="game-over-screen" class="screen p-4">
+    <div class="bg-slate-700 p-6 sm:p-8 rounded-xl shadow-2xl w-full max-w-md text-center">
+        <h1 class="text-3xl sm:text-4xl font-bold mb-6 text-sky-400">¡Juego Terminado!</h1>
+        <p id="game-over-reason" class="text-lg text-slate-300 mb-4"></p>
+        <h2 class="text-2xl font-semibold mb-3 text-amber-400">Resultados Finales:</h2>
+        <ul id="final-scores-list" class="space-y-2 text-left text-slate-200 mb-6">
+        </ul>
+        <button id="play-again-button" class="w-full bg-green-500 hover:bg-green-600 text-white font-semibold p-3 rounded-lg transition duration-200">
+            Volver al Lobby
+        </button>
+    </div>
+</div>
+
+
 <script>
     // --- Application State ---
     let currentScreen = 'password-screen';
@@ -197,7 +219,8 @@
         "Frodo", "Arwen", "Gandalf", "Galadriel", "Aragorn", "Sam", "Gimli",
         "Pippin", "Merry", "Legolas", "Saruman", "Elrond", "Boromir", "Bilbo"
     ];
-    let currentChosenWord = null;
+    let currentChosenWord = ""; // La palabra que el dibujante conoce
+    let wordToGuess = "";       // La palabra que se revela al final del turno
     let wordSelectionTimerId = null;
     let drawingTimerId = null;
     let currentDrawer = null;
@@ -206,12 +229,12 @@
     let connectedPlayersFromServer = [];
     let localUserIsReady = false;
     let playerScores = {};
-    let playersWhoGuessedThisTurn = [];
+    let playersWhoGuessedThisTurn = []; // Nombres de usuarios que adivinaron en el turno actual
 
     // Canvas state
     let canvas, ctx;
-    let drawing = false; // Local drawing state for the drawer
-    let lastX, lastY; // Local last coordinates for the drawer
+    let drawing = false;
+    let lastX, lastY;
     let currentBrushColor = '#000000';
     let currentBrushSize = 3;
     let isEraserActive = false;
@@ -222,7 +245,8 @@
         password: document.getElementById('password-screen'),
         userSelection: document.getElementById('user-selection-screen'),
         lobby: document.getElementById('lobby-screen'),
-        game: document.getElementById('game-screen')
+        game: document.getElementById('game-screen'),
+        gameOver: document.getElementById('game-over-screen')
     };
     const passwordInput = document.getElementById('password-input');
     const passwordSubmit = document.getElementById('password-submit');
@@ -263,6 +287,11 @@
     const eraserButton = document.getElementById('eraser-button');
     const clearCanvasButton = document.getElementById('clear-canvas-button');
     const brushSizeSlider = document.getElementById('brush-size');
+
+    const gameOverReasonP = document.getElementById('game-over-reason');
+    const finalScoresListUl = document.getElementById('final-scores-list');
+    const playAgainButton = document.getElementById('play-again-button');
+
 
     // --- WebSocket Functions ---
     function connectWebSocket() {
@@ -326,14 +355,18 @@
                 break;
             case "chatMessage":
                 if (message.payload && message.payload.username && message.payload.message) {
-                    const chatBox = currentScreen === 'lobby' ? lobbyChatMessages : gameChatMessages;
+                    const chatBox = currentScreen === 'game' ? gameChatMessages : lobbyChatMessages;
                     addChatMessage(chatBox, message.payload.username, message.payload.message);
                 }
                 break;
             case "assignDrawerAndWords":
                 console.log("[CLIENT] assignDrawerAndWords payload:", message.payload);
                 currentDrawer = message.payload.drawerUsername;
-                initTurn(message.payload.wordsToChoose || []);
+                wordToGuess = "";
+                playersWhoGuessedThisTurn = [];
+                gameChatInput.disabled = (selectedUser === currentDrawer);
+                gameChatInput.placeholder = (selectedUser === currentDrawer) ? "Estás dibujando..." : "Adivina la palabra...";
+                initTurn(message.payload.wordsToChoose || [], message.payload.duration || 20);
                 break;
             case "drawingPhaseStart":
                 console.log("[CLIENT] drawingPhaseStart payload:", message.payload);
@@ -345,8 +378,8 @@
                     navigateTo('game');
                 }
 
-                gameChatMessages.innerHTML = '';
-                addChatMessage(gameChatMessages, null, `El juego ha comenzado. ${currentDrawer} va a dibujar.`, true);
+                // gameChatMessages.innerHTML = ''; // Limpiado en initTurn
+                addChatMessage(gameChatMessages, null, `${currentDrawer} va a dibujar.`, true);
 
                 if (selectedUser === currentDrawer) {
                     currentChosenWord = message.payload.wordToDraw;
@@ -363,21 +396,69 @@
                 }
                 wordSelectionArea.classList.add('hidden');
                 startTimer(drawingDuration, gameTimerSpan, () => {
-                    addChatMessage(gameChatMessages, null, `¡Tiempo de dibujar ha terminado para ${currentDrawer}!`, true);
-                    // Server will send gameEnded or newTurn
+                    // El servidor enviará "turnOver" si el tiempo se acaba.
+                    // No es necesario un mensaje local aquí, ya que el servidor lo gestionará.
                 }, "s");
                 break;
             case "drawAction":
                 console.log("[CLIENT] drawAction payload:", message.payload);
                 applyDrawAction(message.payload);
                 break;
-            case "gameEnded":
-                addChatMessage(gameChatMessages, null, `Juego terminado: ${message.payload.reason}`, true);
-                turnEndMessageDiv.textContent = `Juego terminado: ${message.payload.reason}. Volviendo al lobby...`;
+            case "guessCorrect":
+                console.log("[CLIENT] guessCorrect payload:", message.payload);
+                addChatMessage(gameChatMessages, null, `¡${message.payload.guesserUsername} ha adivinado! (+${message.payload.pointsGuesser} puntos para ${message.payload.guesserUsername}, +${message.payload.pointsDrawer} para ${currentDrawer})`, true, true);
+                if (message.payload.guesserUsername === selectedUser) {
+                    gameChatInput.disabled = true;
+                    gameChatInput.placeholder = "¡Adivinaste!";
+                }
+                playersWhoGuessedThisTurn.push(message.payload.guesserUsername); // Mantener registro local
+                // La actualización de puntajes vendrá con 'scoreUpdate'
+                if (message.payload.isTurnOver && message.payload.wordRevealed) {
+                    wordToGuess = message.payload.wordRevealed;
+                    chosenWordDisplay.textContent = wordToGuess.toUpperCase();
+                    // El mensaje de "turnOver" del servidor manejará el mensaje final del turno.
+                }
+                break;
+            case "scoreUpdate":
+                console.log("[CLIENT] scoreUpdate payload:", message.payload);
+                playerScores = message.payload.scores || {};
+                updateScoresDisplay();
+                break;
+            case "turnOver":
+                console.log("[CLIENT] turnOver payload:", message.payload);
+                clearTimeout(drawingTimerId); // Detener temporizador de dibujo local
+                drawingTimerId = null;
+                wordToGuess = message.payload.wordRevealed;
+                chosenWordDisplay.textContent = wordToGuess.toUpperCase();
+                addChatMessage(gameChatMessages, null, `El turno terminó. La palabra era: ${wordToGuess.toUpperCase()}. Razón: ${message.payload.reason}`, true);
+                turnEndMessageDiv.textContent = `El turno ha terminado. La palabra era: ${wordToGuess.toUpperCase()}.`;
                 turnEndMessageDiv.classList.remove('hidden');
-                setTimeout(() => {
-                    handleBackToLobby();
-                }, 5000);
+                gameChatInput.disabled = true;
+                drawingCanvas.classList.add('opacity-50', 'pointer-events-none');
+                // Esperar 'assignDrawerAndWords' para el siguiente turno
+                break;
+            case "gameOver":
+                console.log("[CLIENT] gameOver payload:", message.payload);
+                clearTimeout(drawingTimerId); // Asegurarse que los timers estén limpios
+                clearTimeout(wordSelectionTimerId);
+                playerScores = message.payload.scores || {}; // Actualizar puntajes finales
+                gameOverReasonP.textContent = message.payload.reason || "El juego ha finalizado.";
+                finalScoresListUl.innerHTML = '';
+
+                const sortedUsernames = message.payload.sortedUsers || Object.keys(playerScores).sort((a, b) => playerScores[b] - playerScores[a]);
+
+                sortedUsernames.forEach((username, index) => {
+                    const li = document.createElement('li');
+                    li.classList.add('flex', 'justify-between', 'p-1.5', 'my-1', 'rounded-md');
+                    const rankSpan = document.createElement('span');
+                    rankSpan.textContent = `${index + 1}. ${username}`;
+                    const scoreSpan = document.createElement('span');
+                    scoreSpan.textContent = `${playerScores[username] || 0} puntos`;
+                    li.appendChild(rankSpan);
+                    li.appendChild(scoreSpan);
+                    finalScoresListUl.appendChild(li);
+                });
+                navigateTo('gameOver');
                 break;
             default:
                 console.warn("Tipo de mensaje desconocido del servidor:", message.type);
@@ -428,9 +509,15 @@
         updateScoresDisplay();
         navigateTo('password');
         passwordInput.focus();
+        playAgainButton.addEventListener('click', () => {
+            if(ws && ws.readyState === WebSocket.OPEN && selectedUser) {
+                sendWsMessage("playerReady", { username: selectedUser, isReady: false });
+            }
+            navigateTo('lobby');
+        });
     });
 
-    // --- Score Management (Local, server should eventually manage) ---
+    // --- Score Management ---
     function initializeScores() {
         playerScores = {};
         availableUsers.forEach(user => playerScores[user] = 0);
@@ -439,7 +526,7 @@
         playerScoresLobbyUl.innerHTML = '';
         const sortedScores = Object.entries(playerScores).sort(([,a],[,b]) => b-a);
         sortedScores.forEach(([name, score]) => {
-            if (connectedPlayersFromServer.find(p => p.username === name)) {
+            if (connectedPlayersFromServer.find(p => p.username === name) || playerScores[name] !== undefined) {
                 const li = document.createElement('li');
                 li.classList.add('score-entry', 'p-1', 'rounded-md');
                 li.textContent = `${name}: ${score} puntos`;
@@ -519,7 +606,7 @@
     lobbyChatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleChatSend(lobbyChatInput, lobbyChatMessages, false); });
     startGameButton.addEventListener('click', handleReadyOrStartGame);
 
-    function handleChatSend(inputElement, messagesBox, isGameGuessContext) {
+    function handleChatSend(inputElement, messagesBox, isGameContext) {
         const message = inputElement.value.trim();
         if (!message || !selectedUser) {
             inputElement.focus(); return;
@@ -578,20 +665,23 @@
     gameChatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleChatSend(gameChatInput, gameChatMessages, true); });
     backToLobbyButton.addEventListener('click', handleBackToLobby);
 
-    function initTurn(wordsToChooseByServer = []) {
-        console.log(`[CLIENT] initTurn called. Current drawer: ${currentDrawer}, Selected user: ${selectedUser}`);
+    function initTurn(wordsToChooseByServer = [], wordSelectDuration = 20) {
+        console.log(`[CLIENT] initTurn. Drawer: ${currentDrawer}, User: ${selectedUser}, Words:`, wordsToChooseByServer);
         navigateTo('game');
+
+        gameChatMessages.innerHTML = '';
+        addChatMessage(gameChatMessages, null, `Nuevo turno. ${currentDrawer} va a dibujar.`, true);
 
         gameCurrentDrawerSpan.textContent = currentDrawer || "Nadie";
         chosenWordDisplay.textContent = "";
         wordSelectionArea.classList.add('hidden');
         drawingControlsDiv.classList.add('hidden');
-        gameChatInput.disabled = false;
-        gameChatInput.placeholder = "Adivina o comenta...";
+        gameChatInput.disabled = (selectedUser === currentDrawer);
+        gameChatInput.placeholder = (selectedUser === currentDrawer) ? "Estás dibujando..." : "Adivina la palabra...";
         turnEndMessageDiv.classList.add('hidden');
         turnEndMessageDiv.textContent = '';
         playersWhoGuessedThisTurn = [];
-        clearCanvasFull(); // Limpiar lienzo para el nuevo turno
+        clearCanvasFull();
 
         if (selectedUser === currentDrawer) {
             wordSelectionArea.classList.remove('hidden');
@@ -606,8 +696,8 @@
                     button.addEventListener('click', () => handleWordSelectedByDrawer(word));
                     wordChoicesDiv.appendChild(button);
                 });
-                startTimer(20, wordSelectTimerSpan, () => {
-                    if (wordChoicesDiv.children.length > 0 && selectedUser === currentDrawer) {
+                startTimer(wordSelectDuration, wordSelectTimerSpan, () => {
+                    if (wordChoicesDiv.children.length > 0 && selectedUser === currentDrawer && chosenWordDisplay.textContent === "Eligiendo...") {
                         const activeButtons = Array.from(wordChoicesDiv.children).filter(btn => !btn.disabled);
                         if (activeButtons.length > 0) {
                             const randomWord = wordsToChooseByServer[Math.floor(Math.random() * wordsToChooseByServer.length)];
@@ -633,17 +723,6 @@
         Array.from(wordChoicesDiv.children).forEach(btn => btn.disabled = true);
         sendWsMessage("wordChosenByDrawer", { username: selectedUser, chosenWord: word });
         chosenWordDisplay.textContent = "Palabra enviada...";
-    }
-
-    function handleCorrectGuess(playerName) {
-        console.warn("handleCorrectGuess es local y será reemplazada por lógica del servidor.");
-    }
-
-    function endTurn() {
-        console.warn("endTurn es local y será reemplazada por lógica del servidor.");
-        drawingCanvas.classList.add('opacity-50', 'pointer-events-none');
-        gameChatInput.disabled = true;
-        gameChatInput.placeholder = "Turno terminado.";
     }
 
     function startTimer(duration, displayElement, onEndCallback, suffix = "s") {
@@ -672,7 +751,7 @@
         clearTimeout(wordSelectionTimerId);
         clearTimeout(drawingTimerId);
         wordSelectionTimerId = null; drawingTimerId = null;
-        currentChosenWord = null;
+        currentChosenWord = ""; wordToGuess = "";
         chosenWordDisplay.textContent = "";
         wordSelectionArea.classList.add('hidden');
         gameTimerSpan.textContent = "--";
@@ -692,24 +771,19 @@
 
     // --- Canvas Drawing Logic ---
     function applyDrawAction(payload) {
-        if (!ctx) return; // Asegurarse que el contexto del canvas existe
+        if (!ctx) return;
 
-        // Si la acción es del dibujante actual Y este cliente es el dibujante,
-        // NO aplicar acciones de trazado (start, draw, end) porque ya se hicieron localmente.
-        // Sí aplicar 'clear' y 'controlChange' para mantener la UI de controles sincronizada.
         if (payload.username === selectedUser && selectedUser === currentDrawer) {
             if (payload.action === "start" || payload.action === "draw" || payload.action === "end") {
-                // console.log(`[CLIENT ${selectedUser}] Ignorando eco de mi propia acción de trazado: ${payload.action}`);
                 return;
             }
         }
 
-        // Aplicar estilos del payload ANTES de la acción de dibujo
         ctx.strokeStyle = payload.isEraser ? CANVAS_BACKGROUND_COLOR : payload.color;
         ctx.lineWidth = payload.size;
-        ctx.lineCap = 'round'; // Asegurar consistencia
-        ctx.lineJoin = 'round'; // Asegurar consistencia
-        ctx.globalCompositeOperation = 'source-over'; // Resetear para dibujo normal/borrado
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.globalCompositeOperation = 'source-over';
 
         switch (payload.action) {
             case "start":
@@ -717,43 +791,34 @@
                 ctx.moveTo(payload.x, payload.y);
                 break;
             case "draw":
-                // Para los adivinadores (o si el dibujante tuviera que resincronizar),
-                // cada acción "draw" es un segmento.
-                ctx.beginPath(); // Iniciar un nuevo path para este segmento
+                ctx.beginPath();
                 ctx.moveTo(payload.fromX, payload.fromY);
                 ctx.lineTo(payload.toX, payload.toY);
                 ctx.stroke();
                 break;
             case "end":
-                // No se necesita una acción específica en el canvas para "end" si cada "draw" es un segmento.
                 break;
             case "clear":
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
-                // Si es el dibujante quien recibe su propio eco de "clear", resetear sus herramientas locales
                 if (payload.username === selectedUser && selectedUser === currentDrawer) {
                     isEraserActive = false;
                     currentBrushColor = '#000000';
-                    currentBrushSize = parseFloat(brushSizeSlider.value) || 3; // Mantener tamaño o resetear
+                    currentBrushSize = parseFloat(brushSizeSlider.value) || 3;
                     eraserButton.classList.remove('active');
                     const blackButton = document.querySelector('#color-palette .color-button[data-color="#000000"]');
                     if (blackButton) updateActiveColorButton(blackButton);
                 }
                 break;
             case "controlChange":
-                // El dibujante ya actualizó su estado localmente.
-                // Los adivinadores no necesitan cambiar su 'currentBrushColor' local, etc.
-                // El canvas de los adivinadores se actualizará con los datos de 'color', 'size', 'isEraser'
-                // que vienen con cada acción 'start' o 'draw'.
-                // Si el dibujante recibe esto, puede ser para re-sincronizar sus controles de UI si fuera necesario.
                 if (payload.username === selectedUser && selectedUser === currentDrawer) {
                     if (payload.control === "color") {
                         isEraserActive = payload.isEraser;
-                        currentBrushColor = payload.color; // El payload.color es el color resultante
+                        currentBrushColor = payload.color;
                         eraserButton.classList.toggle('active', isEraserActive);
                         updateActiveColorButton(isEraserActive ? null : document.querySelector(`#color-palette .color-button[data-color="${payload.color}"]`));
-                    } else if (payload.control === "eraser") { // Este es el caso cuando se hace clic en el botón de goma
-                        isEraserActive = payload.isEraser; // payload.value sería "true" o "false"
-                        currentBrushColor = payload.color; // Sería CANVAS_BACKGROUND_COLOR si isEraser es true
+                    } else if (payload.control === "eraser") {
+                        isEraserActive = payload.isEraser;
+                        currentBrushColor = payload.color;
                         eraserButton.classList.toggle('active', isEraserActive);
                         updateActiveColorButton(isEraserActive ? null : document.querySelector(`#color-palette .color-button[data-color="${currentBrushColor}"]`));
                     } else if (payload.control === "brushSize") {
@@ -789,8 +854,6 @@
             button.addEventListener('click', () => {
                 if (selectedUser !== currentDrawer) return;
                 isEraserActive = false; currentBrushColor = color;
-                // ctx.strokeStyle = currentBrushColor; // Se aplica en start/draw
-                // ctx.globalCompositeOperation = 'source-over';
                 eraserButton.classList.remove('active');
                 updateActiveColorButton(button);
                 sendWsMessage("drawAction", { action: "controlChange", control: "color", value: color, isEraser: false, color: currentBrushColor, size: currentBrushSize });
@@ -800,23 +863,19 @@
         eraserButton.addEventListener('click', () => {
             if (selectedUser !== currentDrawer) return;
             isEraserActive = true;
-            // currentBrushColor = CANVAS_BACKGROUND_COLOR; // No cambiar currentBrushColor, solo el efecto
-            // ctx.strokeStyle = CANVAS_BACKGROUND_COLOR;
-            // ctx.globalCompositeOperation = 'source-over';
             eraserButton.classList.add('active');
             updateActiveColorButton(null);
             sendWsMessage("drawAction", { action: "controlChange", control: "eraser", value: "true", isEraser: true, color: CANVAS_BACKGROUND_COLOR, size: currentBrushSize });
         });
         clearCanvasButton.addEventListener('click', () => {
             if (selectedUser === currentDrawer) {
-                clearCanvasFull(); // Limpia localmente
-                sendWsMessage("drawAction", { action: "clear", color: currentBrushColor, size: currentBrushSize, isEraser: isEraserActive }); // Enviar estado actual de herramienta
+                clearCanvasFull();
+                sendWsMessage("drawAction", { action: "clear", color: currentBrushColor, size: currentBrushSize, isEraser: isEraserActive });
             }
         });
         brushSizeSlider.addEventListener('input', (e) => {
             if (selectedUser !== currentDrawer) { e.target.value = currentBrushSize; return; }
             currentBrushSize = parseFloat(e.target.value);
-            // ctx.lineWidth = currentBrushSize; // Se aplica en start/draw
             sendWsMessage("drawAction", { action: "controlChange", control: "brushSize", value: currentBrushSize.toString(), size: currentBrushSize, color: currentBrushColor, isEraser: isEraserActive });
         });
         drawingControlsDiv.classList.add('hidden');
@@ -833,40 +892,40 @@
         const rect = canvas.getBoundingClientRect();
         return { x: evt.touches[0].clientX - rect.left, y: evt.touches[0].clientY - rect.top };
     }
-    function startDrawing(e) { // Drawer's local action
+    function startDrawing(e) {
         if (e.buttons !== 1 || selectedUser !== currentDrawer || currentScreen !== 'game' || drawingCanvas.classList.contains('pointer-events-none')) return;
         drawing = true; const pos = getMousePos(e);
         [lastX, lastY] = [pos.x, pos.y];
         ctx.beginPath();
-        ctx.moveTo(lastX, lastY); // Dibujar localmente
+        ctx.moveTo(lastX, lastY);
         sendWsMessage("drawAction", { action: "start", x: pos.x, y: pos.y, color: currentBrushColor, size: currentBrushSize, isEraser: isEraserActive });
     }
-    function draw(e) { // Drawer's local action
+    function draw(e) {
         if (!drawing || e.buttons !== 1 || selectedUser !== currentDrawer || currentScreen !== 'game' || drawingCanvas.classList.contains('pointer-events-none')) return;
         const pos = getMousePos(e);
         ctx.lineWidth = currentBrushSize;
         ctx.strokeStyle = isEraserActive ? CANVAS_BACKGROUND_COLOR : currentBrushColor;
-        ctx.lineTo(pos.x, pos.y); // Dibujar localmente
-        ctx.stroke(); // Dibujar localmente
+        ctx.lineTo(pos.x, pos.y);
+        ctx.stroke();
 
         sendWsMessage("drawAction", { action: "draw", fromX: lastX, fromY: lastY, toX: pos.x, toY: pos.y, color: currentBrushColor, size: currentBrushSize, isEraser: isEraserActive });
-        lastX = pos.x; lastY = pos.y; // Actualizar lastX, lastY después de enviar
+        lastX = pos.x; lastY = pos.y;
     }
-    function stopDrawing() { // Drawer's local action
+    function stopDrawing() {
         if (drawing) {
             drawing = false;
-            ctx.beginPath(); // Finalizar el path actual para que el siguiente sea nuevo
+            ctx.beginPath();
             sendWsMessage("drawAction", { action: "end", color: currentBrushColor, size: currentBrushSize, isEraser: isEraserActive });
         }
     }
-    function startDrawingTouch(e) { // Drawer's local action
+    function startDrawingTouch(e) {
         if (selectedUser !== currentDrawer || currentScreen !== 'game' || drawingCanvas.classList.contains('pointer-events-none')) return;
         e.preventDefault(); drawing = true; const pos = getTouchPos(e);
         [lastX, lastY] = [pos.x, pos.y];
         ctx.beginPath(); ctx.moveTo(lastX, lastY);
         sendWsMessage("drawAction", { action: "start", x: pos.x, y: pos.y, color: currentBrushColor, size: currentBrushSize, isEraser: isEraserActive });
     }
-    function drawTouch(e) { // Drawer's local action
+    function drawTouch(e) {
         if (!drawing || selectedUser !== currentDrawer || currentScreen !== 'game' || drawingCanvas.classList.contains('pointer-events-none')) return;
         e.preventDefault(); const pos = getTouchPos(e);
         ctx.lineWidth = currentBrushSize;
@@ -876,7 +935,7 @@
         sendWsMessage("drawAction", { action: "draw", fromX: lastX, fromY: lastY, toX: pos.x, toY: pos.y, color: currentBrushColor, size: currentBrushSize, isEraser: isEraserActive });
         lastX = pos.x; lastY = pos.y;
     }
-    function stopDrawingTouch() { // Drawer's local action
+    function stopDrawingTouch() {
         if (drawing) {
             drawing = false;
             ctx.beginPath();
@@ -884,17 +943,15 @@
         }
     }
     function clearCanvasFull() {
-        if (selectedUser !== currentDrawer && currentScreen === 'game') return; // Solo el dibujante puede limpiar explícitamente
+        if (selectedUser !== currentDrawer && currentScreen === 'game') return;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        if (selectedUser === currentDrawer) { // Si es el dibujante, resetear sus herramientas también
+        if (selectedUser === currentDrawer) {
             isEraserActive = false; currentBrushColor = '#000000';
-            // currentBrushSize ya está seteado, o usa el valor del slider
             eraserButton.classList.remove('active');
             const blackButton = document.querySelector('#color-palette .color-button[data-color="#000000"]');
             if (blackButton) updateActiveColorButton(blackButton);
             else if (colorPaletteDiv.firstChild) updateActiveColorButton(colorPaletteDiv.firstChild);
         }
-        // El mensaje "clear" al servidor ya se envía desde el listener del botón
     }
 </script>
 </body>

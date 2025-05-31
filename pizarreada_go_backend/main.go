@@ -3,21 +3,30 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"math/rand"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-// upgrader It is used to upgrade an HTTP connection to a WebSocket connection.
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		// Allow all connections for development.
-		// In production, verify the origin.
 		return true
 	},
+}
+
+// GameState represents the current state of the game.
+type GameState struct {
+	currentDrawerUsername string
+	currentWord           string
+	gameInProgress        bool
+	playerOrder           []*Client // To determine the next Dibujante
+	currentPlayerIndex    int       // Index in playerOrder of the current Dibujante
+	mu                    sync.Mutex
 }
 
 // Client represents a single connected WebSocket client.
@@ -37,6 +46,8 @@ type Hub struct {
 	register   chan *Client     // Channel to register clients.
 	unregister chan *Client     // Channel to unregister the client.
 	mu         sync.Mutex       // To protect client access.
+	gameState  *GameState       // Game state
+	gameWords  []string         // Words available for the game
 }
 
 // Message defines the structure of messages exchanged via WebSocket.
@@ -73,37 +84,74 @@ type UserDetails struct {
 	IsReady  bool   `json:"isReady"`
 }
 
+// AssignDrawerPayload to send words to the dibujante.
+type AssignDrawerPayload struct {
+	DrawerUsername string   `json:"drawerUsername"`
+	WordsToChoose  []string `json:"wordsToChoose,omitempty"` // Only for the dibujante
+}
+
+// WordChosenPayload when the dibujante chooses a word.
+type WordChosenPayload struct {
+	Username   string `json:"username"` // The dibujante
+	ChosenWord string `json:"chosenWord"`
+}
+
+// DrawingPhaseStartPayload to notify start of drawing.
+type DrawingPhaseStartPayload struct {
+	DrawerUsername string `json:"drawerUsername"`
+	WordToDraw     string `json:"wordToDraw,omitempty"` // Only for the dibujante
+	Duration       int    `json:"duration"`             // Duration in seconds to draw
+}
+
+func newGameState() *GameState {
+	return &GameState{
+		gameInProgress:     false,
+		currentPlayerIndex: -1, // No one is drawing initially
+	}
+}
+
 // newHub creates a new Hub instance.
 func newHub() *Hub {
+	rand.Seed(time.Now().UnixNano()) // Initialize random number generator
 	return &Hub{
 		broadcast:  make(chan []byte),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		clients:    make(map[*Client]bool),
+		gameState:  newGameState(),
+		gameWords:  []string{"perro", "casa", "pelota", "silla", "dragon", "arbol", "sol", "luna", "estrella", "rio", "montaña", "flor"},
 	}
 }
 
-// run starts processing messages from the hub.
 func (h *Hub) run() {
 	for {
 		select {
 		case client := <-h.register:
 			h.mu.Lock()
 			h.clients[client] = true
-			log.Printf("Cliente conectado: %s (Total: %d)", client.username, len(h.clients))
+			log.Printf("Cliente registrado (Total: %d)", len(h.clients))
 			h.mu.Unlock()
-			h.broadcastUserList() // Send the updated list after registration
 
 		case client := <-h.unregister:
 			h.mu.Lock()
+			username := client.username // Save before the customer leaves
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)
 				close(client.send)
-				log.Printf("Cliente desconectado: %s (Total: %d)", client.username, len(h.clients))
+				log.Printf("Cliente desconectado: %s (Total: %d)", username, len(h.clients))
 			}
 			h.mu.Unlock()
-			if client.username != "" { // Only transmit if the user has logged in
-				h.broadcastUserList() // Send the updated list after deregistration
+			if username != "" {
+				h.broadcastUserList()
+				// If a player leaves during the game (e.g. end turn, choose new dibujante)
+				h.gameState.mu.Lock()
+				if h.gameState.gameInProgress && h.gameState.currentDrawerUsername == username {
+					log.Printf("El dibujante %s se desconectó. Terminando turno.", username)
+					// TODO: logic to move on to the next dibujante
+					h.gameState.gameInProgress = false
+					h.broadcastGameEnd("El dibujante se desconectó.")
+				}
+				h.gameState.mu.Unlock()
 			}
 
 		case message := <-h.broadcast:
@@ -163,68 +211,136 @@ func (h *Hub) broadcastUserList() {
 	log.Println("Lista de usuarios transmitida:", string(msgBytes))
 }
 
-// checkAllReady checks if all connected users are ready.
-func (h *Hub) checkAllReady() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+// startGame starts the game.
+func (h *Hub) startGame() {
+	h.gameState.mu.Lock()
+	defer h.gameState.mu.Unlock()
 
-	if len(h.clients) == 0 {
+	if h.gameState.gameInProgress {
+		log.Println("Intento de iniciar juego, pero ya está en progreso.")
 		return
 	}
 
-	allReady := true
-	identifiedUserCount := 0
-	for client := range h.clients {
-		client.mu.Lock()
-		// Only consider identified users
-		if client.username != "" {
-			identifiedUserCount++
-			if !client.isReady {
-				allReady = false
-			}
-		}
-		client.mu.Unlock()
-	}
-
-	// Si solo hay un usuario identificado (Gandalf en modo desarrollo), puede empezar solo.
-	if identifiedUserCount == 1 {
-		var singleClient *Client
-		for c := range h.clients {
-			if c.username != "" {
-				singleClient = c
-				break
-			}
-		}
-		if singleClient != nil && singleClient.username == "Gandalf" && singleClient.isReady {
-			log.Println("Gandalf está listo y puede empezar solo.")
-			// No se envía "allReady" porque el inicio lo maneja el cliente de Gandalf
-			return
-		}
-	}
-
-	// For >1 players, everyone must be ready
-	if allReady && identifiedUserCount > 0 {
-		log.Println("Todos los jugadores están listos. Transmitiendo inicio de juego.")
-		msg := Message{Type: "allPlayersReady", Payload: json.RawMessage(`{}`)}
-		msgBytes, _ := json.Marshal(msg)
-		h.broadcast <- msgBytes // Use the hub's broadcast channel
-	} else {
-		log.Printf("No todos los jugadores están listos. Identificados: %d, Listos: %d de %d clientes", identifiedUserCount, countReadyPlayers(h), len(h.clients))
-	}
-}
-
-// countReadyPlayers count how many identified players are ready.
-func countReadyPlayers(h *Hub) int {
-	// The hub's mu.Lock() must already be acquired by the caller (checkAllReady)
-	readyCount := 0
+	h.mu.Lock() // Lock hub to securely access h.clients
+	var readyPlayers []*Client
 	for client := range h.clients {
 		client.mu.Lock()
 		if client.username != "" && client.isReady {
-			readyCount++
+			readyPlayers = append(readyPlayers, client)
 		}
 		client.mu.Unlock()
 	}
-	return readyCount
+	h.mu.Unlock()
+
+	if len(readyPlayers) == 0 {
+		log.Println("No hay jugadores listos para empezar el juego.")
+		return
+	}
+
+	// Mix up the order of players taking turns
+	rand.Shuffle(len(readyPlayers), func(i, j int) {
+		readyPlayers[i], readyPlayers[j] = readyPlayers[j], readyPlayers[i]
+	})
+
+	h.gameState.playerOrder = readyPlayers
+	h.gameState.currentPlayerIndex = 0
+	h.gameState.gameInProgress = true
+	log.Printf("Juego iniciado. Orden de jugadores: %v", getPlayerUsernames(h.gameState.playerOrder))
+
+	h.assignNextDrawer()
+}
+
+// getPlayerUsernames returns a list of usernames for the given players.
+func getPlayerUsernames(players []*Client) []string {
+	var usernames []string
+	for _, p := range players {
+		p.mu.Lock()
+		usernames = append(usernames, p.username)
+		p.mu.Unlock()
+	}
+	return usernames
+}
+
+// assignNextDrawer
+func (h *Hub) assignNextDrawer() {
+	// gameState.mu should already be locked by the caller (startGame or after a turn)
+	if !h.gameState.gameInProgress || len(h.gameState.playerOrder) == 0 {
+		log.Println("No se puede asignar dibujante, juego no en progreso o no hay jugadores.")
+		h.gameState.gameInProgress = false // Ensure that the game does not continue
+		h.broadcastGameEnd("No hay jugadores para continuar.")
+		return
+	}
+
+	// Logic for rotating turns (simplified, may need more for rounds)
+	// h.gameState.currentPlayerIndex = (h.gameState.currentPlayerIndex + 1) % len(h.gameState.playerOrder)
+	if h.gameState.currentPlayerIndex >= len(h.gameState.playerOrder) {
+		log.Println("Todos los jugadores han dibujado en esta ronda. Fin de ronda/juego.")
+		h.gameState.gameInProgress = false
+		h.broadcastGameEnd("Ronda completada.")
+		return
+	}
+
+	drawerClient := h.gameState.playerOrder[h.gameState.currentPlayerIndex]
+	drawerClient.mu.Lock()
+	h.gameState.currentDrawerUsername = drawerClient.username
+	drawerClient.mu.Unlock()
+
+	log.Printf("Asignando dibujante: %s", h.gameState.currentDrawerUsername)
+
+	// Select 3 random words
+	wordsToChoose := h.getRandomWords(3)
+
+	// Send a message to the artist with the words
+	drawerPayload := AssignDrawerPayload{
+		DrawerUsername: h.gameState.currentDrawerUsername,
+		WordsToChoose:  wordsToChoose,
+	}
+	drawerPayloadBytes, _ := json.Marshal(drawerPayload)
+	drawerMsg := Message{Type: "assignDrawerAndWords", Payload: drawerPayloadBytes}
+	drawerMsgBytes, _ := json.Marshal(drawerMsg)
+	drawerClient.send <- drawerMsgBytes
+
+	// Send the message to other players (adivinadores)
+	guesserPayload := AssignDrawerPayload{DrawerUsername: h.gameState.currentDrawerUsername} // Without WordsToChoose
+	guesserPayloadBytes, _ := json.Marshal(guesserPayload)
+	guesserMsg := Message{Type: "assignDrawerAndWords", Payload: guesserPayloadBytes}
+	guesserMsgBytes, _ := json.Marshal(guesserMsg)
+
+	h.mu.Lock() // Block hub to iterate on clients
+	for client := range h.clients {
+		if client != drawerClient {
+			client.send <- guesserMsgBytes
+		}
+	}
+	h.mu.Unlock()
+	h.gameState.currentPlayerIndex++ // Move to next for next time
+}
+
+// getRandomWords returns a list of random words.
+func (h *Hub) getRandomWords(count int) []string {
+	if len(h.gameWords) == 0 {
+		return []string{"default1", "default2", "default3"} // Fallback
+	}
+	rand.Shuffle(len(h.gameWords), func(i, j int) {
+		h.gameWords[i], h.gameWords[j] = h.gameWords[j], h.gameWords[i]
+	})
+
+	numToPick := count
+	if len(h.gameWords) < count {
+		numToPick = len(h.gameWords)
+	}
+	return h.gameWords[:numToPick]
+}
+
+// broadcastGameEnd sends a message to all clients indicating the end of the game.
+// reason is a string describing the reason for the game ending.
+func (h *Hub) broadcastGameEnd(reason string) {
+	log.Println("Transmitiendo fin de juego:", reason)
+	payload := map[string]string{"reason": reason}
+	payloadBytes, _ := json.Marshal(payload)
+	msg := Message{Type: "gameEnded", Payload: payloadBytes}
+	msgBytes, _ := json.Marshal(msg)
+	h.broadcast <- msgBytes
 }
 
 // readPump pumps messages from the WebSocket connection to the hub.
@@ -245,7 +361,7 @@ func (c *Client) readPump() {
 		_, rawMessage, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("Error de lectura de WebSocket: %v", err)
+				log.Printf("Error de lectura de WebSocket para %s: %v", c.username, err)
 			}
 			break // Exit the loop if there is an error (e.g. client disconnected)
 		}
@@ -255,8 +371,7 @@ func (c *Client) readPump() {
 			log.Printf("Error al decodificar mensaje JSON: %v. Mensaje: %s", err, string(rawMessage))
 			continue
 		}
-
-		log.Printf("Mensaje recibido: Tipo=%s, Payload=%s", msg.Type, string(msg.Payload))
+		log.Printf("Mensaje recibido de %s: Tipo=%s", c.username, msg.Type)
 
 		switch msg.Type {
 		case "userIdentify":
@@ -268,8 +383,8 @@ func (c *Client) readPump() {
 			c.mu.Lock()
 			c.username = payload.Username
 			c.isReady = false // By default it is not ready to log in
-			log.Printf("Usuario identificado: %s", c.username)
 			c.mu.Unlock()
+			log.Printf("Usuario identificado: %s", c.username)
 			c.hub.broadcastUserList() // Notify everyone about the new user/updated list
 
 		case "chatMessage":
@@ -279,9 +394,13 @@ func (c *Client) readPump() {
 				log.Printf("Error al decodificar ChatPayload: %v", err)
 				continue
 			}
+			// Add the server username to ensure it is correct
+			payload.Username = c.username // Overwrite in case the client sends another one
+			chatPayloadBytes, _ := json.Marshal(payload)
 			// Repackage the message for transmission, ensuring that the type is correct.
-			chatMsgBytes, _ := json.Marshal(msg) // Use the original message already parsed
-			c.hub.broadcast <- chatMsgBytes
+			finalMsg := Message{Type: "chatMessage", Payload: chatPayloadBytes}
+			finalMsgBytes, _ := json.Marshal(finalMsg)
+			c.hub.broadcast <- finalMsgBytes
 
 		case "playerReady":
 			var payload ReadyPayload
@@ -297,26 +416,113 @@ func (c *Client) readPump() {
 			}
 			c.mu.Unlock()
 			c.hub.broadcastUserList() // Notify everyone about the status change and updated list
-			c.hub.checkAllReady()     // Check if everyone is ready
+
+			// Check if everyone is ready to start the game
+			c.hub.mu.Lock()
+			allReady := true
+			identifiedAndReadyCount := 0
+			totalIdentifiedCount := 0
+			for client := range c.hub.clients {
+				client.mu.Lock()
+				if client.username != "" {
+					totalIdentifiedCount++
+					if !client.isReady {
+						allReady = false
+					} else {
+						identifiedAndReadyCount++
+					}
+				}
+				client.mu.Unlock()
+			}
+			c.hub.mu.Unlock()
+
+			if totalIdentifiedCount > 0 && allReady {
+				log.Println("Todos los jugadores identificados están listos. Iniciando juego.")
+				c.hub.startGame()
+			} else {
+				log.Printf("No todos listos. Listos: %d/%d. Total clientes: %d", identifiedAndReadyCount, totalIdentifiedCount, len(c.hub.clients))
+			}
 
 		case "requestStartGame": // Mensaje enviado por Gandalf para iniciar solo
 			c.mu.Lock()
 			isGandalf := c.username == "Gandalf"
+			isGandalfReady := c.isReady
 			c.mu.Unlock()
-			if isGandalf {
-				log.Printf("Gandalf solicitó iniciar el juego.")
-				// Enviar mensaje de inicio solo a Gandalf o manejarlo como un inicio global si es el único.
-				// Por ahora, la lógica de inicio para Gandalf se maneja más en el cliente
-				// pero el servidor puede confirmar o iniciar la secuencia de juego.
-				// Para este ejemplo, solo registramos. El cliente de Gandalf ya se encarga.
-				// Podríamos enviar un mensaje "gameStartingForGandalf" si fuera necesario.
-				// O, si es el único jugador, checkAllReady podría manejarlo.
-				c.hub.checkAllReady() // Re-evaluar, Gandalf podría estar listo
+
+			if isGandalf && isGandalfReady {
+				c.hub.mu.Lock()
+				numIdentified := 0
+				for cl := range c.hub.clients {
+					cl.mu.Lock()
+					if cl.username != "" {
+						numIdentified++
+					}
+					cl.mu.Unlock()
+				}
+				c.hub.mu.Unlock()
+
+				if numIdentified == 1 { // Gandalf es el único jugador identificado
+					log.Printf("Gandalf (solo y listo) solicitó iniciar el juego.")
+					c.hub.startGame()
+				} else {
+					c.hub.startGame()
+					log.Printf("Gandalf solicitó iniciar, pero hay otros jugadores. Se requiere que todos estén listos.")
+				}
 			}
 
-		// Aquí se añadirían más tipos de mensajes para la lógica del juego (dibujo, adivinanzas, etc.)
+		case "wordChosenByDrawer":
+			var payload WordChosenPayload
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+				log.Printf("Error al decodificar WordChosenPayload: %v", err)
+				continue
+			}
+
+			c.hub.gameState.mu.Lock()
+			if c.username == c.hub.gameState.currentDrawerUsername {
+				c.hub.gameState.currentWord = payload.ChosenWord
+				log.Printf("Dibujante %s eligió la palabra: %s", c.username, payload.ChosenWord)
+
+				// Notify everyone that the drawing phase begins
+				// The dibujante receives the word; the adivinadores do not.
+				drawingPhaseDuration := 90 // segundos
+
+				// Message for the dibujante
+				drawerStartPayload := DrawingPhaseStartPayload{
+					DrawerUsername: c.hub.gameState.currentDrawerUsername,
+					WordToDraw:     c.hub.gameState.currentWord,
+					Duration:       drawingPhaseDuration,
+				}
+				drawerStartPayloadBytes, _ := json.Marshal(drawerStartPayload)
+				drawerStartMsg := Message{Type: "drawingPhaseStart", Payload: drawerStartPayloadBytes}
+				drawerStartMsgBytes, _ := json.Marshal(drawerStartMsg)
+				c.send <- drawerStartMsgBytes // Send only to the dibujante
+
+				// Message for the adivinadores
+				guesserStartPayload := DrawingPhaseStartPayload{
+					DrawerUsername: c.hub.gameState.currentDrawerUsername,
+					Duration:       drawingPhaseDuration,
+					// WordToDraw is ignored for adivinadores
+				}
+				guesserStartPayloadBytes, _ := json.Marshal(guesserStartPayload)
+				guesserStartMsg := Message{Type: "drawingPhaseStart", Payload: guesserStartPayloadBytes}
+				guesserStartMsgBytes, _ := json.Marshal(guesserStartMsg)
+
+				c.hub.mu.Lock() // Block hub to iterate on clients
+				for clientItem := range c.hub.clients {
+					if clientItem != c { // Do not send the dibujante again
+						clientItem.send <- guesserStartMsgBytes
+					}
+				}
+				c.hub.mu.Unlock()
+
+			} else {
+				log.Printf("Usuario %s intentó elegir palabra pero no es el dibujante (%s)", c.username, c.hub.gameState.currentDrawerUsername)
+			}
+			c.hub.gameState.mu.Unlock()
+
+		// TODO: Manejar 'drawingData', 'guessAttempt', 'clearCanvas', etc.
 		default:
-			log.Printf("Tipo de mensaje desconocido: %s", msg.Type)
+			log.Printf("Tipo de mensaje desconocido de %s: %s", c.username, msg.Type)
 		}
 	}
 }
@@ -339,26 +545,8 @@ func (c *Client) writePump() {
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-
-			w, err := c.conn.NextWriter(websocket.TextMessage)
-			if err != nil {
-				log.Printf("Error al obtener NextWriter: %v", err)
-				return
-			}
-			_, err = w.Write(message)
-			if err != nil {
-				log.Printf("Error al escribir: %v", err)
-				return
-			}
-
-			// Añadir mensajes en cola al writer actual si los hay.
-			// n := len(c.send)
-			// for i := 0; i < n; i++ {
-			// 	w.Write(<-c.send)
-			// }
-
-			if err := w.Close(); err != nil {
-				log.Printf("Error al cerrar writer: %v", err)
+			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				log.Printf("Error de escritura de WebSocket para %s: %v", c.username, err)
 				return
 			}
 			log.Printf("Mensaje enviado a %s: %s", c.username, string(message))
@@ -379,14 +567,13 @@ func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		log.Println("Error al actualizar a WebSocket:", err)
 		return
 	}
-	client := &Client{hub: hub, conn: conn, send: make(chan []byte, 256), username: "", isReady: false}
+	client := &Client{hub: hub, conn: conn, send: make(chan []byte, 256)}
 	client.hub.register <- client
 
 	// Allow the goroutine state collection when the function returns.
 	go client.writePump()
 	go client.readPump()
-
-	log.Println("Nuevo cliente WebSocket conectado.")
+	log.Println("Nuevo cliente WebSocket conectado (IP:", r.RemoteAddr, ")")
 }
 
 func main() {
@@ -398,7 +585,7 @@ func main() {
 	})
 
 	port := "8080"
-	log.Printf("Servidor WebSocket escuchando en el puerto %s", port)
+	log.Printf("Servidor WebSocket Pizarreada escuchando en el puerto %s", port)
 	err := http.ListenAndServe(":"+port, nil)
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)

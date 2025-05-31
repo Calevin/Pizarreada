@@ -36,13 +36,20 @@
         .chat-messages::-webkit-scrollbar-thumb:hover {
             background: #555;
         }
-        /* Basic button styling for user selection */
         .user-button {
             transition: background-color 0.3s ease;
         }
         .user-button.selected {
             background-color: #3b82f6; /* Tailwind's blue-500 */
             color: white;
+        }
+        #drawing-canvas {
+            border: 2px solid #4a5568; /* slate-600 */
+            cursor: crosshair;
+            touch-action: none; /* Important for mobile drawing */
+        }
+        .word-choice-button {
+            transition: background-color 0.2s ease-in-out;
         }
     </style>
 </head>
@@ -56,7 +63,8 @@
             <button id="password-submit" class="w-full bg-sky-500 hover:bg-sky-600 text-white font-semibold p-3 rounded-lg transition duration-200 ease-in-out transform hover:scale-105">
                 Ingresar
             </button>
-            <p id="password-error" class="text-red-400 mt-4 text-sm">&nbsp;</p> </div>
+            <p id="password-error" class="text-red-400 mt-4 text-sm">&nbsp;</p>
+        </div>
     </div>
 
     <div id="user-selection-screen" class="screen p-4">
@@ -80,17 +88,14 @@
             <div class="flex-grow flex flex-col sm:flex-row gap-4 overflow-hidden">
                 <div class="sm:w-1/3 bg-slate-800 p-4 rounded-lg">
                     <h3 class="font-semibold mb-2 text-lg text-sky-400">Conectados:</h3>
-                    <ul id="connected-users-list" class="space-y-1 text-slate-300 text-sm">
-                        </ul>
+                    <ul id="connected-users-list" class="space-y-1 text-slate-300 text-sm"></ul>
                 </div>
-
                 <div class="sm:w-2/3 flex flex-col bg-slate-800 p-4 rounded-lg">
                     <h3 class="font-semibold mb-2 text-lg text-sky-400">Chat del Lobby</h3>
-                    <div id="chat-messages" class="chat-messages flex-grow bg-slate-900 p-3 rounded-md overflow-y-auto mb-3 h-48 sm:h-auto border border-slate-600">
-                        </div>
+                    <div id="lobby-chat-messages" class="chat-messages flex-grow bg-slate-900 p-3 rounded-md overflow-y-auto mb-3 h-48 sm:h-auto border border-slate-600"></div>
                     <div class="flex gap-2">
-                        <input type="text" id="chat-input" class="flex-grow p-2 bg-slate-600 border border-slate-500 rounded-lg text-white focus:ring-1 focus:ring-sky-500 outline-none" placeholder="Escribe un mensaje...">
-                        <button id="chat-send" class="bg-sky-500 hover:bg-sky-600 text-white font-semibold px-4 py-2 rounded-lg transition duration-150">Enviar</button>
+                        <input type="text" id="lobby-chat-input" class="flex-grow p-2 bg-slate-600 border border-slate-500 rounded-lg text-white focus:ring-1 focus:ring-sky-500 outline-none" placeholder="Escribe un mensaje...">
+                        <button id="lobby-chat-send" class="bg-sky-500 hover:bg-sky-600 text-white font-semibold px-4 py-2 rounded-lg transition duration-150">Enviar</button>
                     </div>
                 </div>
             </div>
@@ -101,13 +106,41 @@
         </div>
     </div>
 
-    <div id="game-screen" class="screen p-4">
-        <div class="bg-slate-700 p-8 rounded-xl shadow-2xl w-full max-w-4xl text-center">
-            <h1 class="text-4xl font-bold mb-6 text-green-400">¡Partida Iniciada!</h1>
-            <p class="text-xl text-slate-300">Aquí estará el lienzo y el juego.</p>
-            <p class="mt-4 text-slate-400">Usuario: <span id="game-username" class="font-semibold text-green-300"></span></p>
-            <button id="back-to-lobby-button" class="mt-8 bg-sky-500 hover:bg-sky-600 text-white font-semibold p-3 rounded-lg transition duration-200">
-                Volver al Lobby (Temporal)
+    <div id="game-screen" class="screen p-2 sm:p-4">
+        <div class="bg-slate-700 p-3 sm:p-6 rounded-xl shadow-2xl w-full max-w-4xl flex flex-col h-[95vh] sm:max-h-[90vh]">
+            <div class="flex justify-between items-center mb-3 sm:mb-4">
+                <h2 class="text-xl sm:text-3xl font-bold text-green-400">¡A Dibujar!</h2>
+                <div class="text-right">
+                    <p class="text-sm text-slate-300">Turno de: <span id="game-current-drawer" class="font-semibold text-sky-300"></span></p>
+                    <p class="text-lg sm:text-xl font-semibold text-red-400">Tiempo: <span id="game-timer">--</span></p>
+                </div>
+            </div>
+
+            <div id="word-selection-area" class="mb-4 text-center hidden">
+                <h3 class="text-lg sm:text-xl font-semibold mb-2 text-yellow-400">Elige una palabra para dibujar:</h3>
+                <div id="word-choices" class="flex flex-wrap justify-center gap-2 sm:gap-3">
+                    </div>
+                <p class="mt-2 text-sm text-slate-400">Tienes <span id="word-select-timer">20</span> segundos.</p>
+            </div>
+            
+            <div class="flex-grow flex flex-col lg:flex-row gap-3 sm:gap-4 overflow-hidden">
+                <div class="lg:w-2/3 flex flex-col items-center">
+                    <p class="mb-1 text-sm text-slate-300 h-5">Palabra a dibujar: <span id="chosen-word-display" class="font-bold text-xl text-lime-400"></span></p>
+                    <canvas id="drawing-canvas" width="500" height="400" class="bg-white rounded-lg shadow-md w-full max-w-full"></canvas>
+                    </div>
+
+                <div class="lg:w-1/3 flex flex-col bg-slate-800 p-3 sm:p-4 rounded-lg h-64 lg:h-auto">
+                    <h3 class="font-semibold mb-2 text-md sm:text-lg text-sky-400">Chat del Juego</h3>
+                    <div id="game-chat-messages" class="chat-messages flex-grow bg-slate-900 p-2 sm:p-3 rounded-md overflow-y-auto mb-2 sm:mb-3 border border-slate-600"></div>
+                    <div class="flex gap-2">
+                        <input type="text" id="game-chat-input" class="flex-grow p-2 bg-slate-600 border border-slate-500 rounded-lg text-white focus:ring-1 focus:ring-sky-500 outline-none" placeholder="Adivina o comenta...">
+                        <button id="game-chat-send" class="bg-sky-500 hover:bg-sky-600 text-white font-semibold px-3 py-2 rounded-lg transition duration-150 text-sm sm:text-base">Enviar</button>
+                    </div>
+                </div>
+            </div>
+
+            <button id="back-to-lobby-button" class="w-full sm:w-auto mt-4 sm:mt-6 bg-red-500 hover:bg-red-600 text-white font-semibold p-2 sm:p-3 rounded-lg transition duration-200 self-center">
+                Salir de la Partida
             </button>
         </div>
     </div>
@@ -116,16 +149,25 @@
         // --- Application State ---
         let currentScreen = 'password-screen';
         let selectedUser = null;
-        let selectedUserButton = null; // To track the selected button for styling
+        let selectedUserButton = null;
         const UNIVERSAL_PASSWORD = "comunidad";
         const users = [
             "Frodo", "Arwen", "Gandalf", "Galadriel", "Aragorn", "Sam", "Gimli", 
             "Pippin", "Merry", "Legolas", "Saruman", "Elrond", "Boromir", "Bilbo"
         ];
-        // Simulate other players and their ready status for lobby
-        // In a real app, this would come from a server.
-        let connectedPlayers = []; // Will store objects like { name: 'User', ready: false }
+        const gameWords = ["perro", "casa", "pelota", "silla", "dragon", "arbol"];
+        let currentChosenWord = null;
+        let wordSelectionTimerId = null;
+        let drawingTimerId = null;
+
+        let connectedPlayers = []; 
         let localUserReady = false;
+
+        // Canvas state
+        let canvas, ctx;
+        let drawing = false;
+        let lastX, lastY;
+
 
         // --- DOM Elements ---
         const screens = {
@@ -143,19 +185,30 @@
         const userSelectError = document.getElementById('user-select-error');
         
         const lobbyUsername = document.getElementById('lobby-username');
-        const chatMessages = document.getElementById('chat-messages');
-        const chatInput = document.getElementById('chat-input');
-        const chatSend = document.getElementById('chat-send');
+        const lobbyChatMessages = document.getElementById('lobby-chat-messages');
+        const lobbyChatInput = document.getElementById('lobby-chat-input');
+        const lobbyChatSend = document.getElementById('lobby-chat-send');
         const startGameButton = document.getElementById('start-game-button');
         const readyCountSpan = document.getElementById('ready-count');
         const totalPlayersLobbySpan = document.getElementById('total-players-lobby');
         const connectedUsersListUl = document.getElementById('connected-users-list');
         const lobbyMessage = document.getElementById('lobby-message');
 
-        const gameUsername = document.getElementById('game-username');
+        // Game Screen Elements
+        const gameCurrentDrawerSpan = document.getElementById('game-current-drawer');
+        const gameTimerSpan = document.getElementById('game-timer');
+        const wordSelectionArea = document.getElementById('word-selection-area');
+        const wordChoicesDiv = document.getElementById('word-choices');
+        const wordSelectTimerSpan = document.getElementById('word-select-timer');
+        const chosenWordDisplay = document.getElementById('chosen-word-display');
+        const drawingCanvas = document.getElementById('drawing-canvas');
+        const gameChatMessages = document.getElementById('game-chat-messages');
+        const gameChatInput = document.getElementById('game-chat-input');
+        const gameChatSend = document.getElementById('game-chat-send');
         const backToLobbyButton = document.getElementById('back-to-lobby-button');
 
-        // --- Functions ---
+
+        // --- Utility Functions ---
         function navigateTo(screenId) {
             Object.values(screens).forEach(screen => screen.classList.remove('active'));
             screens[screenId].classList.add('active');
@@ -163,13 +216,51 @@
             console.log(`Navigated to ${screenId}`);
         }
 
-        function displayPasswordError(message) {
-            passwordError.textContent = message;
-        }
-        function displayUserSelectError(message) {
-            userSelectError.textContent = message;
+        function displayPasswordError(message) { passwordError.textContent = message; }
+        function displayUserSelectError(message) { userSelectError.textContent = message; }
+
+        function addChatMessage(chatBox, user, message, isSystem = false) {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('mb-1.5', 'text-sm', 'break-words');
+            if (isSystem) {
+                messageElement.classList.add('text-amber-400', 'italic');
+                messageElement.textContent = message;
+            } else {
+                messageElement.classList.add('text-slate-200');
+                const userSpan = document.createElement('span');
+                userSpan.classList.add('font-semibold', selectedUser === user ? 'text-sky-300' : 'text-pink-400');
+                userSpan.textContent = `${user}: `;
+                messageElement.appendChild(userSpan);
+                messageElement.append(document.createTextNode(message));
+            }
+            chatBox.appendChild(messageElement);
+            chatBox.scrollTop = chatBox.scrollHeight;
         }
 
+        // --- Initialization ---
+        document.addEventListener('DOMContentLoaded', () => {
+            populateUserList();
+            initCanvas();
+            navigateTo('password');
+            passwordInput.focus();
+        });
+
+        // --- Password Screen Logic ---
+        passwordSubmit.addEventListener('click', handlePasswordSubmit);
+        passwordInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handlePasswordSubmit(); });
+
+        function handlePasswordSubmit() {
+            if (passwordInput.value === UNIVERSAL_PASSWORD) {
+                displayPasswordError('');
+                navigateTo('userSelection');
+            } else {
+                displayPasswordError('Contraseña incorrecta. Intenta de nuevo.');
+                passwordInput.value = '';
+                passwordInput.focus();
+            }
+        }
+
+        // --- User Selection Screen Logic ---
         function populateUserList() {
             users.forEach(user => {
                 const button = document.createElement('button');
@@ -191,30 +282,16 @@
                 userListDiv.appendChild(button);
             });
         }
-
-        function handlePasswordSubmit() {
-            if (passwordInput.value === UNIVERSAL_PASSWORD) {
-                displayPasswordError('');
-                navigateTo('userSelection');
-            } else {
-                displayPasswordError('Contraseña incorrecta. Intenta de nuevo.');
-                passwordInput.value = '';
-                passwordInput.focus();
-            }
-        }
+        userSelectSubmit.addEventListener('click', handleUserSelectSubmit);
 
         function handleUserSelectSubmit() {
             if (selectedUser) {
                 displayUserSelectError('');
                 lobbyUsername.textContent = selectedUser;
-                // Simulate this user joining
                 connectedPlayers = [{ name: selectedUser, ready: false }]; 
-                // Simulate other players (for non-Gandalf scenarios)
-                if (selectedUser !== "Gandalf") {
-                    // Add a couple of dummy players for testing lobby counts
-                    // In a real app, this would be dynamic
-                    if (!users.find(u => u === "Invitado X")) connectedPlayers.push({ name: "Invitado X", ready: Math.random() > 0.5 });
-                    if (!users.find(u => u === "Invitado Y")) connectedPlayers.push({ name: "Invitado Y", ready: Math.random() > 0.5 });
+                if (selectedUser !== "Gandalf") { // Gandalf is dev user
+                    if (!users.find(u => u === "Aragorn")) connectedPlayers.push({ name: "Aragorn", ready: Math.random() > 0.5 });
+                    if (!users.find(u => u === "Frodo")) connectedPlayers.push({ name: "Frodo", ready: Math.random() > 0.5 });
                 }
                 updateLobbyUI();
                 navigateTo('lobby');
@@ -223,76 +300,50 @@
             }
         }
         
-        function addChatMessage(user, message, isSystem = false) {
-            const messageElement = document.createElement('div');
-            messageElement.classList.add('mb-1.5', 'text-sm');
-            if (isSystem) {
-                messageElement.classList.add('text-amber-400', 'italic');
-                messageElement.textContent = message;
-            } else {
-                messageElement.classList.add('text-slate-200');
-                const userSpan = document.createElement('span');
-                userSpan.classList.add('font-semibold', selectedUser === user ? 'text-sky-300' : 'text-pink-400');
-                userSpan.textContent = `${user}: `;
-                messageElement.appendChild(userSpan);
-                messageElement.append(document.createTextNode(message));
-            }
-            chatMessages.appendChild(messageElement);
-            chatMessages.scrollTop = chatMessages.scrollHeight; // Auto-scroll to bottom
-        }
+        // --- Lobby Screen Logic ---
+        lobbyChatSend.addEventListener('click', () => handleChatSend(lobbyChatInput, lobbyChatMessages));
+        lobbyChatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleChatSend(lobbyChatInput, lobbyChatMessages); });
+        startGameButton.addEventListener('click', handleStartGame);
 
-        function handleChatSend() {
-            const message = chatInput.value.trim();
+        function handleChatSend(inputElement, messagesBox) {
+            const message = inputElement.value.trim();
             if (message && selectedUser) {
-                addChatMessage(selectedUser, message);
-                chatInput.value = '';
-                // In a real app, send this message to the server
+                addChatMessage(messagesBox, selectedUser, message);
+                inputElement.value = '';
+                // TODO: Send message to server
             }
-            chatInput.focus();
+            inputElement.focus();
         }
 
         function updateLobbyUI() {
-            // Update connected users list
-            connectedUsersListUl.innerHTML = ''; // Clear existing list
+            connectedUsersListUl.innerHTML = '';
             connectedPlayers.forEach(player => {
                 const li = document.createElement('li');
                 li.textContent = `${player.name} ${player.ready ? '✔️' : '⏳'}`;
-                if (player.name === selectedUser) {
-                    li.classList.add('font-bold', 'text-sky-300');
-                }
+                if (player.name === selectedUser) li.classList.add('font-bold', 'text-sky-300');
                 connectedUsersListUl.appendChild(li);
             });
 
-            // Update ready counts
             const currentReadyCount = connectedPlayers.filter(p => p.ready).length;
             readyCountSpan.textContent = currentReadyCount;
             totalPlayersLobbySpan.textContent = connectedPlayers.length;
 
-            // Enable/Disable start button
             if (selectedUser === "Gandalf") {
                 startGameButton.disabled = false;
                 lobbyMessage.textContent = "Modo desarrollador: Puedes iniciar solo.";
             } else {
                 const allReady = connectedPlayers.length > 0 && currentReadyCount === connectedPlayers.length;
                 startGameButton.disabled = !allReady;
-                if (allReady) {
-                    lobbyMessage.textContent = "¡Todos listos! Presiona comenzar.";
-                } else {
-                    lobbyMessage.textContent = "Esperando a que todos los jugadores estén listos...";
-                }
+                lobbyMessage.textContent = allReady ? "¡Todos listos! Presiona comenzar." : "Esperando a que todos los jugadores estén listos...";
             }
         }
 
         function handleStartGame() {
-            // If user is Gandalf, can start alone (dev mode)
             if (selectedUser === "Gandalf") {
-                gameUsername.textContent = selectedUser;
-                navigateTo('game');
-                addChatMessage(null, `${selectedUser} ha iniciado la partida en modo desarrollador.`, true);
+                initGandalfTurn();
                 return;
             }
 
-            // For other users, check if they are the one marked as ready
             const localPlayerEntry = connectedPlayers.find(p => p.name === selectedUser);
             if (localPlayerEntry && !localPlayerEntry.ready) {
                 localPlayerEntry.ready = true;
@@ -300,59 +351,267 @@
                 startGameButton.textContent = "¡Listo!";
                 startGameButton.classList.remove('bg-orange-500', 'hover:bg-orange-600');
                 startGameButton.classList.add('bg-teal-500', 'cursor-not-allowed');
-                startGameButton.disabled = true; // Disable after clicking ready
-                addChatMessage(null, `${selectedUser} está listo/a.`, true);
+                startGameButton.disabled = true;
+                addChatMessage(lobbyChatMessages, null, `${selectedUser} está listo/a.`, true);
             }
-            
-            updateLobbyUI(); // Update counts and potentially enable start for others if all ready
+            updateLobbyUI();
 
-            // Check if all players are ready (simulated)
             const allPlayersReady = connectedPlayers.every(p => p.ready);
             if (allPlayersReady && connectedPlayers.length > 0) {
-                 // Only navigate if this client is part of the ready group
                 if (localUserReady || connectedPlayers.find(p => p.name === selectedUser)?.ready) {
-                    gameUsername.textContent = selectedUser;
-                    navigateTo('game');
-                    addChatMessage(null, `¡Todos listos! Iniciando partida...`, true);
+                    // For now, non-Gandalf users just see a message, Gandalf gets the drawing tools
+                    addChatMessage(lobbyChatMessages, null, `¡Todos listos! Iniciando partida... (Funcionalidad completa para Gandalf)`, true);
+                    // In a real game, all players would move to game screen.
+                    // For now, only Gandalf proceeds fully.
+                    // navigateTo('game'); // This would be for all players
                 }
             }
         }
 
-        // --- Event Listeners ---
-        document.addEventListener('DOMContentLoaded', () => {
-            populateUserList();
-            navigateTo('password'); // Start at password screen
-            passwordInput.focus();
-        });
+        // --- Game Screen Logic ---
+        gameChatSend.addEventListener('click', () => handleChatSend(gameChatInput, gameChatMessages));
+        gameChatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleChatSend(gameChatInput, gameChatMessages); });
+        backToLobbyButton.addEventListener('click', handleBackToLobby);
 
-        passwordSubmit.addEventListener('click', handlePasswordSubmit);
-        passwordInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') handlePasswordSubmit();
-        });
+        function initGandalfTurn() {
+            console.log("Initializing Gandalf's turn");
+            gameCurrentDrawerSpan.textContent = "Gandalf";
+            chosenWordDisplay.textContent = ""; // Clear previous word
+            wordSelectionArea.classList.remove('hidden');
+            wordChoicesDiv.innerHTML = ''; // Clear previous choices
+            clearCanvas(); // Clear canvas from previous turn if any
+            
+            // Disable drawing until word is selected
+            drawingCanvas.classList.add('opacity-50', 'pointer-events-none');
 
-        userSelectSubmit.addEventListener('click', handleUserSelectSubmit);
 
-        chatSend.addEventListener('click', handleChatSend);
-        chatInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') handleChatSend();
-        });
+            const wordsToChoose = getRandomWords(gameWords, 3);
+            wordsToChoose.forEach(word => {
+                const button = document.createElement('button');
+                button.textContent = word;
+                button.classList.add('word-choice-button', 'bg-sky-500', 'hover:bg-sky-600', 'text-white', 'font-semibold', 'py-2', 'px-4', 'rounded-lg', 'transition');
+                button.addEventListener('click', () => handleWordSelected(word));
+                wordChoicesDiv.appendChild(button);
+            });
 
-        startGameButton.addEventListener('click', handleStartGame);
+            startTimer(20, wordSelectTimerSpan, () => {
+                // If timer ends and no word selected, pick one randomly
+                if (!currentChosenWord) {
+                    const randomWord = wordsToChoose[Math.floor(Math.random() * wordsToChoose.length)];
+                    handleWordSelected(randomWord);
+                    addChatMessage(gameChatMessages, null, `Tiempo agotado. Palabra seleccionada: ${randomWord}`, true);
+                }
+            }, "s restantes");
+            
+            navigateTo('game');
+            addChatMessage(lobbyChatMessages, null, `Gandalf ha iniciado la partida en modo desarrollador.`, true);
+            // Transfer lobby chat to game chat for Gandalf
+            gameChatMessages.innerHTML = lobbyChatMessages.innerHTML;
+        }
+
+        function getRandomWords(sourceArray, count) {
+            const shuffled = [...sourceArray].sort(() => 0.5 - Math.random());
+            return shuffled.slice(0, count);
+        }
+
+        function handleWordSelected(word) {
+            console.log("Word selected:", word);
+            clearTimeout(wordSelectionTimerId); // Stop word selection timer
+            currentChosenWord = word;
+            chosenWordDisplay.textContent = word.toUpperCase();
+            wordSelectionArea.classList.add('hidden');
+            
+            // Enable drawing
+            drawingCanvas.classList.remove('opacity-50', 'pointer-events-none');
+            drawingCanvas.focus();
+
+
+            addChatMessage(gameChatMessages, null, `Gandalf ha elegido una palabra y va a dibujar.`, true);
+            startTimer(90, gameTimerSpan, () => {
+                addChatMessage(gameChatMessages, null, `¡Tiempo de dibujar ha terminado para Gandalf!`, true);
+                // Here you would handle end of drawing turn (e.g., show word, next player)
+                // For now, just a message.
+                drawingCanvas.classList.add('opacity-50', 'pointer-events-none'); // Disable canvas after time
+            }, "s");
+        }
         
-        backToLobbyButton.addEventListener('click', () => {
-            // Reset local ready state if going back
+        function startTimer(duration, displayElement, onEndCallback, suffix = "s") {
+            // Clear any existing timer for this display element
+            if (displayElement === wordSelectTimerSpan && wordSelectionTimerId) clearTimeout(wordSelectionTimerId);
+            if (displayElement === gameTimerSpan && drawingTimerId) clearTimeout(drawingTimerId);
+
+            let timeLeft = duration;
+            displayElement.textContent = `${timeLeft}${suffix}`;
+
+            function tick() {
+                timeLeft--;
+                displayElement.textContent = `${timeLeft}${suffix}`;
+                if (timeLeft > 0) {
+                    if (displayElement === wordSelectTimerSpan) wordSelectionTimerId = setTimeout(tick, 1000);
+                    if (displayElement === gameTimerSpan) drawingTimerId = setTimeout(tick, 1000);
+                } else {
+                    displayElement.textContent = `0${suffix}`;
+                    onEndCallback();
+                }
+            }
+            tick(); // Start immediately
+        }
+
+        function handleBackToLobby() {
+            // Clear timers
+            clearTimeout(wordSelectionTimerId);
+            clearTimeout(drawingTimerId);
+            wordSelectionTimerId = null;
+            drawingTimerId = null;
+
+            // Reset game state variables
+            currentChosenWord = null;
+            chosenWordDisplay.textContent = "";
+            wordSelectionArea.classList.add('hidden');
+            gameTimerSpan.textContent = "--";
+            wordSelectTimerSpan.textContent = "20";
+
+
+            // Reset lobby state for the user
             localUserReady = false;
             const localPlayerEntry = connectedPlayers.find(p => p.name === selectedUser);
             if (localPlayerEntry) {
-                localPlayerEntry.ready = false; // User is no longer ready
+                localPlayerEntry.ready = false;
             }
             startGameButton.textContent = "¡Comenzar Partida!";
             startGameButton.classList.remove('bg-teal-500', 'cursor-not-allowed');
             startGameButton.classList.add('bg-orange-500', 'hover:bg-orange-600');
-            // startGameButton.disabled = false; // Re-enable based on logic in updateLobbyUI
+            
             updateLobbyUI();
             navigateTo('lobby');
-        });
+            addChatMessage(lobbyChatMessages, null, `${selectedUser} ha vuelto al lobby.`, true);
+        }
+
+        // --- Canvas Drawing Logic ---
+        function initCanvas() {
+            canvas = drawingCanvas;
+            ctx = canvas.getContext('2d');
+            // Set canvas dimensions based on its CSS-defined size for better responsiveness
+            // This should be done after the element is visible and sized by CSS.
+            // For now, using fixed internal resolution. Will adjust if needed.
+            // canvas.width = canvas.offsetWidth;
+            // canvas.height = canvas.offsetHeight; 
+            // Set default drawing styles
+            ctx.strokeStyle = '#000000'; // Black
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            // Event listeners for drawing (mouse)
+            canvas.addEventListener('mousedown', startDrawing);
+            canvas.addEventListener('mousemove', draw);
+            canvas.addEventListener('mouseup', stopDrawing);
+            canvas.addEventListener('mouseout', stopDrawing); // Stop if mouse leaves canvas
+
+            // Event listeners for drawing (touch)
+            canvas.addEventListener('touchstart', startDrawingTouch, { passive: false });
+            canvas.addEventListener('touchmove', drawTouch, { passive: false });
+            canvas.addEventListener('touchend', stopDrawingTouch);
+            canvas.addEventListener('touchcancel', stopDrawingTouch);
+
+            // Resize listener (basic)
+            // window.addEventListener('resize', resizeCanvas);
+            // resizeCanvas(); // Initial size
+        }
+
+        // function resizeCanvas() {
+        //     // Save current canvas content
+        //     const tempCanvas = document.createElement('canvas');
+        //     const tempCtx = tempCanvas.getContext('2d');
+        //     tempCanvas.width = canvas.width;
+        //     tempCanvas.height = canvas.height;
+        //     tempCtx.drawImage(canvas, 0, 0);
+
+        //     // Resize
+        //     canvas.width = canvas.offsetWidth;
+        //     canvas.height = canvas.offsetHeight;
+            
+        //     // Restore content and re-apply styles
+        //     ctx.drawImage(tempCanvas, 0, 0);
+        //     ctx.strokeStyle = '#000000';
+        //     ctx.lineWidth = 3;
+        //     ctx.lineCap = 'round';
+        //     ctx.lineJoin = 'round';
+        // }
+
+
+        function getMousePos(evt) {
+            const rect = canvas.getBoundingClientRect();
+            return {
+                x: evt.clientX - rect.left,
+                y: evt.clientY - rect.top
+            };
+        }
+        
+        function getTouchPos(evt) {
+            const rect = canvas.getBoundingClientRect();
+            // Use the first touch point
+            return {
+                x: evt.touches[0].clientX - rect.left,
+                y: evt.touches[0].clientY - rect.top
+            };
+        }
+
+
+        function startDrawing(e) {
+            if (e.buttons !== 1) return; // Only draw with left mouse button
+            drawing = true;
+            const pos = getMousePos(e);
+            [lastX, lastY] = [pos.x, pos.y];
+            // ctx.beginPath(); // Start a new path
+            // ctx.moveTo(lastX, lastY);
+        }
+        
+        function draw(e) {
+            if (!drawing || e.buttons !== 1) return;
+            const pos = getMousePos(e);
+            ctx.beginPath(); // Start a new path for each segment for smoother lines
+            ctx.moveTo(lastX, lastY);
+            ctx.lineTo(pos.x, pos.y);
+            ctx.stroke();
+            [lastX, lastY] = [pos.x, pos.y];
+        }
+
+        function stopDrawing() {
+            if (drawing) {
+                // ctx.closePath(); // Close the path
+                drawing = false;
+            }
+        }
+
+        // Touch event handlers
+        function startDrawingTouch(e) {
+            e.preventDefault(); // Prevent scrolling while drawing
+            drawing = true;
+            const pos = getTouchPos(e);
+            [lastX, lastY] = [pos.x, pos.y];
+        }
+
+        function drawTouch(e) {
+            if (!drawing) return;
+            e.preventDefault(); // Prevent scrolling
+            const pos = getTouchPos(e);
+            ctx.beginPath();
+            ctx.moveTo(lastX, lastY);
+            ctx.lineTo(pos.x, pos.y);
+            ctx.stroke();
+            [lastX, lastY] = [pos.x, pos.y];
+        }
+
+        function stopDrawingTouch(e) {
+            if (drawing) {
+                drawing = false;
+            }
+        }
+
+        function clearCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
 
     </script>
 </body>

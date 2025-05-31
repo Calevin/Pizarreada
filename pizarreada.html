@@ -9,19 +9,18 @@
     <style>
         body {
             font-family: 'Inter', sans-serif;
-            overscroll-behavior: none; /* Prevents pull-to-refresh on mobile */
+            overscroll-behavior: none; 
         }
         .screen {
-            display: none; /* Hidden by default */
-            min-height: 100vh; /* Full viewport height */
+            display: none; 
+            min-height: 100vh; 
         }
         .screen.active {
-            display: flex; /* Show active screen */
+            display: flex; 
             flex-direction: column;
             align-items: center;
             justify-content: center;
         }
-        /* Custom scrollbar for chat */
         .chat-messages::-webkit-scrollbar {
             width: 8px;
         }
@@ -40,16 +39,35 @@
             transition: background-color 0.3s ease;
         }
         .user-button.selected {
-            background-color: #3b82f6; /* Tailwind's blue-500 */
+            background-color: #3b82f6; 
             color: white;
         }
         #drawing-canvas {
-            border: 2px solid #4a5568; /* slate-600 */
+            border: 2px solid #4a5568; 
             cursor: crosshair;
-            touch-action: none; /* Important for mobile drawing */
+            touch-action: none; 
         }
         .word-choice-button {
             transition: background-color 0.2s ease-in-out;
+        }
+        .control-button {
+            transition: background-color 0.2s ease-in-out, transform 0.1s ease;
+        }
+        .control-button.active {
+            background-color: #0ea5e9; /* sky-500 */
+            color: white;
+            transform: scale(1.05);
+        }
+        .color-button {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            border: 2px solid transparent;
+            transition: border-color 0.2s ease-in-out, transform 0.1s ease;
+        }
+        .color-button.active {
+            border-color: #0ea5e9; /* sky-500 */
+            transform: scale(1.1);
         }
     </style>
 </head>
@@ -118,8 +136,7 @@
 
             <div id="word-selection-area" class="mb-4 text-center hidden">
                 <h3 class="text-lg sm:text-xl font-semibold mb-2 text-yellow-400">Elige una palabra para dibujar:</h3>
-                <div id="word-choices" class="flex flex-wrap justify-center gap-2 sm:gap-3">
-                    </div>
+                <div id="word-choices" class="flex flex-wrap justify-center gap-2 sm:gap-3"></div>
                 <p class="mt-2 text-sm text-slate-400">Tienes <span id="word-select-timer">20</span> segundos.</p>
             </div>
             
@@ -127,7 +144,14 @@
                 <div class="lg:w-2/3 flex flex-col items-center">
                     <p class="mb-1 text-sm text-slate-300 h-5">Palabra a dibujar: <span id="chosen-word-display" class="font-bold text-xl text-lime-400"></span></p>
                     <canvas id="drawing-canvas" width="500" height="400" class="bg-white rounded-lg shadow-md w-full max-w-full"></canvas>
+                    <div id="drawing-controls" class="mt-3 p-2 bg-slate-800 rounded-lg flex flex-wrap justify-center items-center gap-2 sm:gap-3 w-full max-w-md">
+                        <div id="color-palette" class="flex gap-2">
+                            </div>
+                        <button id="eraser-button" class="control-button bg-slate-600 hover:bg-slate-500 text-white font-medium py-1.5 px-3 rounded-md text-sm">Goma</button>
+                        <button id="clear-canvas-button" class="control-button bg-red-500 hover:bg-red-600 text-white font-medium py-1.5 px-3 rounded-md text-sm">Limpiar</button>
+                        <input type="range" id="brush-size" min="1" max="50" value="3" class="w-24 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 accent-sky-500">
                     </div>
+                </div>
 
                 <div class="lg:w-1/3 flex flex-col bg-slate-800 p-3 sm:p-4 rounded-lg h-64 lg:h-auto">
                     <h3 class="font-semibold mb-2 text-md sm:text-lg text-sky-400">Chat del Juego</h3>
@@ -167,7 +191,10 @@
         let canvas, ctx;
         let drawing = false;
         let lastX, lastY;
-
+        let currentBrushColor = '#000000'; // Default black
+        let currentBrushSize = 3;
+        let isEraserActive = false;
+        const CANVAS_BACKGROUND_COLOR = '#FFFFFF'; // White, for eraser logic
 
         // --- DOM Elements ---
         const screens = {
@@ -194,7 +221,6 @@
         const connectedUsersListUl = document.getElementById('connected-users-list');
         const lobbyMessage = document.getElementById('lobby-message');
 
-        // Game Screen Elements
         const gameCurrentDrawerSpan = document.getElementById('game-current-drawer');
         const gameTimerSpan = document.getElementById('game-timer');
         const wordSelectionArea = document.getElementById('word-selection-area');
@@ -207,6 +233,12 @@
         const gameChatSend = document.getElementById('game-chat-send');
         const backToLobbyButton = document.getElementById('back-to-lobby-button');
 
+        // Drawing Controls Elements
+        const drawingControlsDiv = document.getElementById('drawing-controls');
+        const colorPaletteDiv = document.getElementById('color-palette');
+        const eraserButton = document.getElementById('eraser-button');
+        const clearCanvasButton = document.getElementById('clear-canvas-button');
+        const brushSizeSlider = document.getElementById('brush-size');
 
         // --- Utility Functions ---
         function navigateTo(screenId) {
@@ -241,6 +273,7 @@
         document.addEventListener('DOMContentLoaded', () => {
             populateUserList();
             initCanvas();
+            initDrawingControls();
             navigateTo('password');
             passwordInput.focus();
         });
@@ -289,7 +322,7 @@
                 displayUserSelectError('');
                 lobbyUsername.textContent = selectedUser;
                 connectedPlayers = [{ name: selectedUser, ready: false }]; 
-                if (selectedUser !== "Gandalf") { // Gandalf is dev user
+                if (selectedUser !== "Gandalf") {
                     if (!users.find(u => u === "Aragorn")) connectedPlayers.push({ name: "Aragorn", ready: Math.random() > 0.5 });
                     if (!users.find(u => u === "Frodo")) connectedPlayers.push({ name: "Frodo", ready: Math.random() > 0.5 });
                 }
@@ -310,7 +343,6 @@
             if (message && selectedUser) {
                 addChatMessage(messagesBox, selectedUser, message);
                 inputElement.value = '';
-                // TODO: Send message to server
             }
             inputElement.focus();
         }
@@ -359,11 +391,7 @@
             const allPlayersReady = connectedPlayers.every(p => p.ready);
             if (allPlayersReady && connectedPlayers.length > 0) {
                 if (localUserReady || connectedPlayers.find(p => p.name === selectedUser)?.ready) {
-                    // For now, non-Gandalf users just see a message, Gandalf gets the drawing tools
                     addChatMessage(lobbyChatMessages, null, `¡Todos listos! Iniciando partida... (Funcionalidad completa para Gandalf)`, true);
-                    // In a real game, all players would move to game screen.
-                    // For now, only Gandalf proceeds fully.
-                    // navigateTo('game'); // This would be for all players
                 }
             }
         }
@@ -374,16 +402,14 @@
         backToLobbyButton.addEventListener('click', handleBackToLobby);
 
         function initGandalfTurn() {
-            console.log("Initializing Gandalf's turn");
             gameCurrentDrawerSpan.textContent = "Gandalf";
-            chosenWordDisplay.textContent = ""; // Clear previous word
+            chosenWordDisplay.textContent = ""; 
             wordSelectionArea.classList.remove('hidden');
-            wordChoicesDiv.innerHTML = ''; // Clear previous choices
-            clearCanvas(); // Clear canvas from previous turn if any
+            wordChoicesDiv.innerHTML = ''; 
+            clearCanvasFull(); 
+            drawingControlsDiv.classList.remove('hidden'); // Show drawing controls
             
-            // Disable drawing until word is selected
             drawingCanvas.classList.add('opacity-50', 'pointer-events-none');
-
 
             const wordsToChoose = getRandomWords(gameWords, 3);
             wordsToChoose.forEach(word => {
@@ -395,7 +421,6 @@
             });
 
             startTimer(20, wordSelectTimerSpan, () => {
-                // If timer ends and no word selected, pick one randomly
                 if (!currentChosenWord) {
                     const randomWord = wordsToChoose[Math.floor(Math.random() * wordsToChoose.length)];
                     handleWordSelected(randomWord);
@@ -405,7 +430,6 @@
             
             navigateTo('game');
             addChatMessage(lobbyChatMessages, null, `Gandalf ha iniciado la partida en modo desarrollador.`, true);
-            // Transfer lobby chat to game chat for Gandalf
             gameChatMessages.innerHTML = lobbyChatMessages.innerHTML;
         }
 
@@ -415,28 +439,22 @@
         }
 
         function handleWordSelected(word) {
-            console.log("Word selected:", word);
-            clearTimeout(wordSelectionTimerId); // Stop word selection timer
+            clearTimeout(wordSelectionTimerId); 
             currentChosenWord = word;
             chosenWordDisplay.textContent = word.toUpperCase();
             wordSelectionArea.classList.add('hidden');
             
-            // Enable drawing
             drawingCanvas.classList.remove('opacity-50', 'pointer-events-none');
             drawingCanvas.focus();
-
 
             addChatMessage(gameChatMessages, null, `Gandalf ha elegido una palabra y va a dibujar.`, true);
             startTimer(90, gameTimerSpan, () => {
                 addChatMessage(gameChatMessages, null, `¡Tiempo de dibujar ha terminado para Gandalf!`, true);
-                // Here you would handle end of drawing turn (e.g., show word, next player)
-                // For now, just a message.
-                drawingCanvas.classList.add('opacity-50', 'pointer-events-none'); // Disable canvas after time
+                drawingCanvas.classList.add('opacity-50', 'pointer-events-none'); 
             }, "s");
         }
         
         function startTimer(duration, displayElement, onEndCallback, suffix = "s") {
-            // Clear any existing timer for this display element
             if (displayElement === wordSelectTimerSpan && wordSelectionTimerId) clearTimeout(wordSelectionTimerId);
             if (displayElement === gameTimerSpan && drawingTimerId) clearTimeout(drawingTimerId);
 
@@ -454,25 +472,22 @@
                     onEndCallback();
                 }
             }
-            tick(); // Start immediately
+            tick();
         }
 
         function handleBackToLobby() {
-            // Clear timers
             clearTimeout(wordSelectionTimerId);
             clearTimeout(drawingTimerId);
             wordSelectionTimerId = null;
             drawingTimerId = null;
 
-            // Reset game state variables
             currentChosenWord = null;
             chosenWordDisplay.textContent = "";
             wordSelectionArea.classList.add('hidden');
             gameTimerSpan.textContent = "--";
             wordSelectTimerSpan.textContent = "20";
+            drawingControlsDiv.classList.add('hidden'); // Hide drawing controls
 
-
-            // Reset lobby state for the user
             localUserReady = false;
             const localPlayerEntry = connectedPlayers.find(p => p.name === selectedUser);
             if (localPlayerEntry) {
@@ -491,54 +506,76 @@
         function initCanvas() {
             canvas = drawingCanvas;
             ctx = canvas.getContext('2d');
-            // Set canvas dimensions based on its CSS-defined size for better responsiveness
-            // This should be done after the element is visible and sized by CSS.
-            // For now, using fixed internal resolution. Will adjust if needed.
-            // canvas.width = canvas.offsetWidth;
-            // canvas.height = canvas.offsetHeight; 
+            
             // Set default drawing styles
-            ctx.strokeStyle = '#000000'; // Black
-            ctx.lineWidth = 3;
+            ctx.strokeStyle = currentBrushColor;
+            ctx.lineWidth = currentBrushSize;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
+            canvas.style.backgroundColor = CANVAS_BACKGROUND_COLOR;
 
-            // Event listeners for drawing (mouse)
+
             canvas.addEventListener('mousedown', startDrawing);
             canvas.addEventListener('mousemove', draw);
             canvas.addEventListener('mouseup', stopDrawing);
-            canvas.addEventListener('mouseout', stopDrawing); // Stop if mouse leaves canvas
+            canvas.addEventListener('mouseout', stopDrawing); 
 
-            // Event listeners for drawing (touch)
             canvas.addEventListener('touchstart', startDrawingTouch, { passive: false });
             canvas.addEventListener('touchmove', drawTouch, { passive: false });
             canvas.addEventListener('touchend', stopDrawingTouch);
             canvas.addEventListener('touchcancel', stopDrawingTouch);
+        }
+        
+        function initDrawingControls() {
+            const colors = ['#000000', '#FF0000', '#0000FF', '#008000', '#FFFF00', '#FFFFFF']; // Black, Red, Blue, Green, Yellow, White (for eraser)
+            const colorNames = ['Negro', 'Rojo', 'Azul', 'Verde', 'Amarillo', 'Borrador (Blanco)'];
 
-            // Resize listener (basic)
-            // window.addEventListener('resize', resizeCanvas);
-            // resizeCanvas(); // Initial size
+            colors.forEach((color, index) => {
+                const button = document.createElement('button');
+                button.classList.add('color-button');
+                button.style.backgroundColor = color;
+                button.dataset.color = color;
+                button.setAttribute('aria-label', `Seleccionar color ${colorNames[index]}`);
+                if (color === currentBrushColor) button.classList.add('active');
+                
+                button.addEventListener('click', () => {
+                    isEraserActive = false; // Deactivate dedicated eraser if a color is picked
+                    currentBrushColor = color;
+                    ctx.strokeStyle = currentBrushColor;
+                    ctx.globalCompositeOperation = 'source-over'; // Reset composite operation
+                    eraserButton.classList.remove('active');
+                    updateActiveColorButton(button);
+                });
+                colorPaletteDiv.appendChild(button);
+            });
+
+            eraserButton.addEventListener('click', () => {
+                isEraserActive = true;
+                // For a simple eraser on a white background, we draw with white.
+                // For a more advanced eraser, one might use 'destination-out'.
+                ctx.strokeStyle = CANVAS_BACKGROUND_COLOR; 
+                ctx.globalCompositeOperation = 'source-over'; // Or 'destination-out' if preferred and handled carefully
+                eraserButton.classList.add('active');
+                updateActiveColorButton(null); // No color button is active when eraser is on
+            });
+
+            clearCanvasButton.addEventListener('click', clearCanvasFull);
+
+            brushSizeSlider.addEventListener('input', (e) => {
+                currentBrushSize = e.target.value;
+                ctx.lineWidth = currentBrushSize;
+            });
+            drawingControlsDiv.classList.add('hidden'); // Initially hidden
         }
 
-        // function resizeCanvas() {
-        //     // Save current canvas content
-        //     const tempCanvas = document.createElement('canvas');
-        //     const tempCtx = tempCanvas.getContext('2d');
-        //     tempCanvas.width = canvas.width;
-        //     tempCanvas.height = canvas.height;
-        //     tempCtx.drawImage(canvas, 0, 0);
-
-        //     // Resize
-        //     canvas.width = canvas.offsetWidth;
-        //     canvas.height = canvas.offsetHeight;
-            
-        //     // Restore content and re-apply styles
-        //     ctx.drawImage(tempCanvas, 0, 0);
-        //     ctx.strokeStyle = '#000000';
-        //     ctx.lineWidth = 3;
-        //     ctx.lineCap = 'round';
-        //     ctx.lineJoin = 'round';
-        // }
-
+        function updateActiveColorButton(activeButton) {
+            document.querySelectorAll('#color-palette .color-button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            if (activeButton) {
+                activeButton.classList.add('active');
+            }
+        }
 
         function getMousePos(evt) {
             const rect = canvas.getBoundingClientRect();
@@ -550,43 +587,46 @@
         
         function getTouchPos(evt) {
             const rect = canvas.getBoundingClientRect();
-            // Use the first touch point
             return {
                 x: evt.touches[0].clientX - rect.left,
                 y: evt.touches[0].clientY - rect.top
             };
         }
 
-
         function startDrawing(e) {
-            if (e.buttons !== 1) return; // Only draw with left mouse button
+            if (e.buttons !== 1) return; 
             drawing = true;
             const pos = getMousePos(e);
             [lastX, lastY] = [pos.x, pos.y];
-            // ctx.beginPath(); // Start a new path
-            // ctx.moveTo(lastX, lastY);
         }
         
         function draw(e) {
             if (!drawing || e.buttons !== 1) return;
             const pos = getMousePos(e);
-            ctx.beginPath(); // Start a new path for each segment for smoother lines
+            ctx.beginPath(); 
             ctx.moveTo(lastX, lastY);
             ctx.lineTo(pos.x, pos.y);
+            ctx.lineWidth = currentBrushSize; // Apply current brush size
+            if (isEraserActive) {
+                ctx.strokeStyle = CANVAS_BACKGROUND_COLOR; // Ensure eraser uses background color
+                // For 'destination-out' eraser:
+                // ctx.globalCompositeOperation = 'destination-out';
+            } else {
+                ctx.strokeStyle = currentBrushColor;
+                // ctx.globalCompositeOperation = 'source-over';
+            }
             ctx.stroke();
             [lastX, lastY] = [pos.x, pos.y];
         }
 
         function stopDrawing() {
             if (drawing) {
-                // ctx.closePath(); // Close the path
                 drawing = false;
             }
         }
 
-        // Touch event handlers
         function startDrawingTouch(e) {
-            e.preventDefault(); // Prevent scrolling while drawing
+            e.preventDefault(); 
             drawing = true;
             const pos = getTouchPos(e);
             [lastX, lastY] = [pos.x, pos.y];
@@ -594,23 +634,42 @@
 
         function drawTouch(e) {
             if (!drawing) return;
-            e.preventDefault(); // Prevent scrolling
+            e.preventDefault(); 
             const pos = getTouchPos(e);
             ctx.beginPath();
             ctx.moveTo(lastX, lastY);
             ctx.lineTo(pos.x, pos.y);
+            ctx.lineWidth = currentBrushSize; // Apply current brush size
+             if (isEraserActive) {
+                ctx.strokeStyle = CANVAS_BACKGROUND_COLOR;
+                // ctx.globalCompositeOperation = 'destination-out';
+            } else {
+                ctx.strokeStyle = currentBrushColor;
+                // ctx.globalCompositeOperation = 'source-over';
+            }
             ctx.stroke();
             [lastX, lastY] = [pos.x, pos.y];
         }
 
-        function stopDrawingTouch(e) {
+        function stopDrawingTouch() {
             if (drawing) {
                 drawing = false;
             }
         }
 
-        function clearCanvas() {
+        function clearCanvasFull() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // Optional: If you want to ensure the background is explicitly redrawn (e.g. if it's not white or if using transparency)
+            // ctx.fillStyle = CANVAS_BACKGROUND_COLOR;
+            // ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Reset to default drawing tool (e.g., black pen)
+            isEraserActive = false;
+            currentBrushColor = '#000000';
+            ctx.strokeStyle = currentBrushColor;
+            ctx.globalCompositeOperation = 'source-over';
+            eraserButton.classList.remove('active');
+            updateActiveColorButton(document.querySelector('#color-palette .color-button[data-color="#000000"]'));
         }
 
     </script>

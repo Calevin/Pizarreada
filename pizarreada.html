@@ -69,6 +69,12 @@
             border-color: #0ea5e9; /* sky-500 */
             transform: scale(1.1);
         }
+        .score-entry {
+            transition: background-color 0.3s ease;
+        }
+        .score-entry.highlight {
+            background-color: #2563eb; /* blue-600 */
+        }
     </style>
 </head>
 <body class="bg-gradient-to-br from-slate-900 to-slate-800 text-white antialiased">
@@ -107,6 +113,9 @@
                 <div class="sm:w-1/3 bg-slate-800 p-4 rounded-lg">
                     <h3 class="font-semibold mb-2 text-lg text-sky-400">Conectados:</h3>
                     <ul id="connected-users-list" class="space-y-1 text-slate-300 text-sm"></ul>
+                    <h3 class="font-semibold mt-4 mb-2 text-lg text-sky-400">Puntajes:</h3>
+                    <ul id="player-scores-lobby" class="space-y-1 text-slate-300 text-sm">
+                        </ul>
                 </div>
                 <div class="sm:w-2/3 flex flex-col bg-slate-800 p-4 rounded-lg">
                     <h3 class="font-semibold mb-2 text-lg text-sky-400">Chat del Lobby</h3>
@@ -127,9 +136,12 @@
     <div id="game-screen" class="screen p-2 sm:p-4">
         <div class="bg-slate-700 p-3 sm:p-6 rounded-xl shadow-2xl w-full max-w-4xl flex flex-col h-[95vh] sm:max-h-[90vh]">
             <div class="flex justify-between items-center mb-3 sm:mb-4">
-                <h2 class="text-xl sm:text-3xl font-bold text-green-400">¡A Dibujar!</h2>
-                <div class="text-right">
+                <div>
+                    <h2 class="text-xl sm:text-3xl font-bold text-green-400">¡A Dibujar!</h2>
                     <p class="text-sm text-slate-300">Turno de: <span id="game-current-drawer" class="font-semibold text-sky-300"></span></p>
+                </div>
+                <div class="text-right">
+                     <p id="game-score-display" class="text-md sm:text-lg text-amber-400">Puntos: <span id="current-player-score">0</span></p>
                     <p class="text-lg sm:text-xl font-semibold text-red-400">Tiempo: <span id="game-timer">--</span></p>
                 </div>
             </div>
@@ -145,8 +157,7 @@
                     <p class="mb-1 text-sm text-slate-300 h-5">Palabra a dibujar: <span id="chosen-word-display" class="font-bold text-xl text-lime-400"></span></p>
                     <canvas id="drawing-canvas" width="500" height="400" class="bg-white rounded-lg shadow-md w-full max-w-full"></canvas>
                     <div id="drawing-controls" class="mt-3 p-2 bg-slate-800 rounded-lg flex flex-wrap justify-center items-center gap-2 sm:gap-3 w-full max-w-md">
-                        <div id="color-palette" class="flex gap-2">
-                            </div>
+                        <div id="color-palette" class="flex gap-2"></div>
                         <button id="eraser-button" class="control-button bg-slate-600 hover:bg-slate-500 text-white font-medium py-1.5 px-3 rounded-md text-sm">Goma</button>
                         <button id="clear-canvas-button" class="control-button bg-red-500 hover:bg-red-600 text-white font-medium py-1.5 px-3 rounded-md text-sm">Limpiar</button>
                         <input type="range" id="brush-size" min="1" max="50" value="3" class="w-24 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 accent-sky-500">
@@ -160,6 +171,7 @@
                         <input type="text" id="game-chat-input" class="flex-grow p-2 bg-slate-600 border border-slate-500 rounded-lg text-white focus:ring-1 focus:ring-sky-500 outline-none" placeholder="Adivina o comenta...">
                         <button id="game-chat-send" class="bg-sky-500 hover:bg-sky-600 text-white font-semibold px-3 py-2 rounded-lg transition duration-150 text-sm sm:text-base">Enviar</button>
                     </div>
+                    <div id="turn-end-message" class="mt-3 text-center text-yellow-300 p-2 bg-slate-700 rounded hidden"></div>
                 </div>
             </div>
 
@@ -183,18 +195,21 @@
         let currentChosenWord = null;
         let wordSelectionTimerId = null;
         let drawingTimerId = null;
+        let currentDrawer = null; // Stores the name of the current drawer
 
         let connectedPlayers = []; 
         let localUserReady = false;
+        let playerScores = {}; // Stores scores: { "Gandalf": 10, "Frodo": 5 }
+        let playersWhoGuessedThisTurn = []; // Stores names of players who guessed in current turn
 
         // Canvas state
         let canvas, ctx;
         let drawing = false;
         let lastX, lastY;
-        let currentBrushColor = '#000000'; // Default black
+        let currentBrushColor = '#000000'; 
         let currentBrushSize = 3;
         let isEraserActive = false;
-        const CANVAS_BACKGROUND_COLOR = '#FFFFFF'; // White, for eraser logic
+        const CANVAS_BACKGROUND_COLOR = '#FFFFFF'; 
 
         // --- DOM Elements ---
         const screens = {
@@ -219,10 +234,12 @@
         const readyCountSpan = document.getElementById('ready-count');
         const totalPlayersLobbySpan = document.getElementById('total-players-lobby');
         const connectedUsersListUl = document.getElementById('connected-users-list');
+        const playerScoresLobbyUl = document.getElementById('player-scores-lobby'); // Scores in lobby
         const lobbyMessage = document.getElementById('lobby-message');
 
         const gameCurrentDrawerSpan = document.getElementById('game-current-drawer');
         const gameTimerSpan = document.getElementById('game-timer');
+        const currentPlayerScoreSpan = document.getElementById('current-player-score'); // Score in game screen
         const wordSelectionArea = document.getElementById('word-selection-area');
         const wordChoicesDiv = document.getElementById('word-choices');
         const wordSelectTimerSpan = document.getElementById('word-select-timer');
@@ -232,8 +249,8 @@
         const gameChatInput = document.getElementById('game-chat-input');
         const gameChatSend = document.getElementById('game-chat-send');
         const backToLobbyButton = document.getElementById('back-to-lobby-button');
+        const turnEndMessageDiv = document.getElementById('turn-end-message');
 
-        // Drawing Controls Elements
         const drawingControlsDiv = document.getElementById('drawing-controls');
         const colorPaletteDiv = document.getElementById('color-palette');
         const eraserButton = document.getElementById('eraser-button');
@@ -245,38 +262,83 @@
             Object.values(screens).forEach(screen => screen.classList.remove('active'));
             screens[screenId].classList.add('active');
             currentScreen = screenId;
-            console.log(`Navigated to ${screenId}`);
         }
 
         function displayPasswordError(message) { passwordError.textContent = message; }
         function displayUserSelectError(message) { userSelectError.textContent = message; }
 
-        function addChatMessage(chatBox, user, message, isSystem = false) {
+        function addChatMessage(chatBox, user, message, isSystem = false, highlight = false) {
             const messageElement = document.createElement('div');
-            messageElement.classList.add('mb-1.5', 'text-sm', 'break-words');
+            messageElement.classList.add('mb-1.5', 'text-sm', 'break-words', 'p-1', 'rounded');
             if (isSystem) {
-                messageElement.classList.add('text-amber-400', 'italic');
+                messageElement.classList.add('text-amber-300', 'italic', 'bg-slate-700');
                 messageElement.textContent = message;
             } else {
                 messageElement.classList.add('text-slate-200');
                 const userSpan = document.createElement('span');
-                userSpan.classList.add('font-semibold', selectedUser === user ? 'text-sky-300' : 'text-pink-400');
+                userSpan.classList.add('font-semibold');
+                userSpan.style.color = getPlayerColor(user); // Assign a color based on username
                 userSpan.textContent = `${user}: `;
                 messageElement.appendChild(userSpan);
                 messageElement.append(document.createTextNode(message));
             }
+            if (highlight) {
+                messageElement.classList.add('bg-sky-700', 'font-semibold');
+            }
             chatBox.appendChild(messageElement);
             chatBox.scrollTop = chatBox.scrollHeight;
         }
+        
+        // Simple hash function to get a color for a user (for chat)
+        function getPlayerColor(username) {
+            let hash = 0;
+            for (let i = 0; i < username.length; i++) {
+                hash = username.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            const colors = ['#fb923c', '#f87171', '#a78bfa', '#60a5fa', '#34d399', '#facc15']; // orange, red, violet, blue, emerald, amber
+            return colors[Math.abs(hash) % colors.length];
+        }
+
 
         // --- Initialization ---
         document.addEventListener('DOMContentLoaded', () => {
             populateUserList();
             initCanvas();
             initDrawingControls();
+            initializeScores();
+            updateScoresDisplay();
             navigateTo('password');
             passwordInput.focus();
         });
+
+        // --- Score Management ---
+        function initializeScores() {
+            playerScores = {}; // Reset scores
+            users.forEach(user => {
+                playerScores[user] = 0;
+            });
+        }
+
+        function updateScoresDisplay() {
+            playerScoresLobbyUl.innerHTML = ''; // Clear lobby scores
+            const sortedScores = Object.entries(playerScores).sort(([,a],[,b]) => b-a);
+
+            sortedScores.forEach(([name, score]) => {
+                const li = document.createElement('li');
+                li.classList.add('score-entry', 'p-1', 'rounded-md');
+                li.textContent = `${name}: ${score} puntos`;
+                if (name === selectedUser) {
+                    li.classList.add('text-sky-300', 'font-bold');
+                }
+                playerScoresLobbyUl.appendChild(li);
+            });
+
+            if (selectedUser && playerScores.hasOwnProperty(selectedUser)) {
+                 currentPlayerScoreSpan.textContent = playerScores[selectedUser];
+            } else {
+                 currentPlayerScoreSpan.textContent = '0';
+            }
+        }
 
         // --- Password Screen Logic ---
         passwordSubmit.addEventListener('click', handlePasswordSubmit);
@@ -311,6 +373,7 @@
                     button.classList.remove('bg-slate-600', 'hover:bg-slate-500');
                     userSelectSubmit.disabled = false;
                     userSelectError.textContent = '';
+                    updateScoresDisplay(); // Update score display for current user
                 });
                 userListDiv.appendChild(button);
             });
@@ -321,12 +384,21 @@
             if (selectedUser) {
                 displayUserSelectError('');
                 lobbyUsername.textContent = selectedUser;
+                // Simulate connected players, always including the selected user
                 connectedPlayers = [{ name: selectedUser, ready: false }]; 
-                if (selectedUser !== "Gandalf") {
-                    if (!users.find(u => u === "Aragorn")) connectedPlayers.push({ name: "Aragorn", ready: Math.random() > 0.5 });
-                    if (!users.find(u => u === "Frodo")) connectedPlayers.push({ name: "Frodo", ready: Math.random() > 0.5 });
+                if (selectedUser !== "Gandalf") { 
+                    // Add some dummy players if not Gandalf, ensuring they are not Gandalf
+                    if (!connectedPlayers.find(p => p.name === "Aragorn") && "Aragorn" !== selectedUser) connectedPlayers.push({ name: "Aragorn", ready: Math.random() > 0.5 });
+                    if (!connectedPlayers.find(p => p.name === "Frodo") && "Frodo" !== selectedUser) connectedPlayers.push({ name: "Frodo", ready: Math.random() > 0.5 });
+                } else {
+                    // If Gandalf is selected, ensure he is the only one for dev mode
+                    connectedPlayers = [{ name: "Gandalf", ready: false }];
+                }
+                if (!playerScores.hasOwnProperty(selectedUser)) { // Initialize score if new user joins context
+                    playerScores[selectedUser] = 0;
                 }
                 updateLobbyUI();
+                updateScoresDisplay();
                 navigateTo('lobby');
             } else {
                 displayUserSelectError('Por favor, selecciona un usuario.');
@@ -334,18 +406,39 @@
         }
         
         // --- Lobby Screen Logic ---
-        lobbyChatSend.addEventListener('click', () => handleChatSend(lobbyChatInput, lobbyChatMessages));
-        lobbyChatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleChatSend(lobbyChatInput, lobbyChatMessages); });
+        lobbyChatSend.addEventListener('click', () => handleChatSend(lobbyChatInput, lobbyChatMessages, false)); // Not a game guess
+        lobbyChatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleChatSend(lobbyChatInput, lobbyChatMessages, false); });
         startGameButton.addEventListener('click', handleStartGame);
 
-        function handleChatSend(inputElement, messagesBox) {
+        function handleChatSend(inputElement, messagesBox, isGameGuessContext) {
             const message = inputElement.value.trim();
-            if (message && selectedUser) {
-                addChatMessage(messagesBox, selectedUser, message);
-                inputElement.value = '';
+            if (!message || !selectedUser) {
+                inputElement.focus();
+                return;
             }
+
+            if (isGameGuessContext) {
+                // Check if player has already guessed
+                if (playersWhoGuessedThisTurn.includes(selectedUser)) {
+                    addChatMessage(messagesBox, null, "Ya has adivinado esta palabra.", true);
+                    inputElement.value = '';
+                    inputElement.focus();
+                    return;
+                }
+                // Check for correct guess
+                if (currentChosenWord && message.toLowerCase() === currentChosenWord.toLowerCase()) {
+                    handleCorrectGuess(selectedUser);
+                    // Don't add the word itself to chat, handleCorrectGuess shows a system message
+                } else {
+                    addChatMessage(messagesBox, selectedUser, message);
+                }
+            } else { // Lobby chat or non-guessing game chat
+                addChatMessage(messagesBox, selectedUser, message);
+            }
+            inputElement.value = '';
             inputElement.focus();
         }
+
 
         function updateLobbyUI() {
             connectedUsersListUl.innerHTML = '';
@@ -368,14 +461,21 @@
                 startGameButton.disabled = !allReady;
                 lobbyMessage.textContent = allReady ? "¡Todos listos! Presiona comenzar." : "Esperando a que todos los jugadores estén listos...";
             }
+            updateScoresDisplay();
         }
 
         function handleStartGame() {
+            // Reset scores only if it's a "fresh" game start from lobby, not for Gandalf's re-play
+            // For now, Gandalf mode implies a single-player session, scores persist per session.
+            // initializeScores(); // Consider if scores should reset per game or persist
+            
             if (selectedUser === "Gandalf") {
-                initGandalfTurn();
+                currentDrawer = "Gandalf"; // Set Gandalf as the drawer
+                initTurn();
                 return;
             }
 
+            // Logic for multi-player start (simplified)
             const localPlayerEntry = connectedPlayers.find(p => p.name === selectedUser);
             if (localPlayerEntry && !localPlayerEntry.ready) {
                 localPlayerEntry.ready = true;
@@ -391,46 +491,75 @@
             const allPlayersReady = connectedPlayers.every(p => p.ready);
             if (allPlayersReady && connectedPlayers.length > 0) {
                 if (localUserReady || connectedPlayers.find(p => p.name === selectedUser)?.ready) {
-                    addChatMessage(lobbyChatMessages, null, `¡Todos listos! Iniciando partida... (Funcionalidad completa para Gandalf)`, true);
+                    addChatMessage(lobbyChatMessages, null, `¡Todos listos! Iniciando partida...`, true);
+                    // For now, only Gandalf can fully proceed to game screen.
+                    // In a real game, determine first drawer and navigate all.
+                    // For testing, if not Gandalf, they just see the message.
+                    if (selectedUser === "Gandalf") { // Should have been caught above, but as a fallback
+                        currentDrawer = "Gandalf";
+                        initTurn();
+                    } else {
+                        // Non-Gandalf players would wait for server to assign drawer and start game.
+                        // For now, they stay in lobby.
+                        lobbyMessage.textContent = "El juego comenzará pronto. Esperando al servidor...";
+                    }
                 }
             }
         }
 
         // --- Game Screen Logic ---
-        gameChatSend.addEventListener('click', () => handleChatSend(gameChatInput, gameChatMessages));
-        gameChatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleChatSend(gameChatInput, gameChatMessages); });
+        gameChatSend.addEventListener('click', () => handleChatSend(gameChatInput, gameChatMessages, true)); // Game guess context
+        gameChatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleChatSend(gameChatInput, gameChatMessages, true); });
         backToLobbyButton.addEventListener('click', handleBackToLobby);
 
-        function initGandalfTurn() {
-            gameCurrentDrawerSpan.textContent = "Gandalf";
+        function initTurn() { // Renamed from initGandalfTurn
+            gameCurrentDrawerSpan.textContent = currentDrawer;
             chosenWordDisplay.textContent = ""; 
             wordSelectionArea.classList.remove('hidden');
             wordChoicesDiv.innerHTML = ''; 
             clearCanvasFull(); 
-            drawingControlsDiv.classList.remove('hidden'); // Show drawing controls
+            drawingControlsDiv.classList.remove('hidden');
+            gameChatInput.disabled = false; // Enable chat for guessers (Gandalf is also guesser here)
+            turnEndMessageDiv.classList.add('hidden');
+            turnEndMessageDiv.textContent = '';
             
-            drawingCanvas.classList.add('opacity-50', 'pointer-events-none');
+            playersWhoGuessedThisTurn = []; // Reset for the new turn
 
-            const wordsToChoose = getRandomWords(gameWords, 3);
-            wordsToChoose.forEach(word => {
-                const button = document.createElement('button');
-                button.textContent = word;
-                button.classList.add('word-choice-button', 'bg-sky-500', 'hover:bg-sky-600', 'text-white', 'font-semibold', 'py-2', 'px-4', 'rounded-lg', 'transition');
-                button.addEventListener('click', () => handleWordSelected(word));
-                wordChoicesDiv.appendChild(button);
-            });
+            if (selectedUser === currentDrawer) { // If current client is the drawer
+                drawingCanvas.classList.add('opacity-50', 'pointer-events-none'); // Drawer can't draw yet
+                wordSelectionArea.classList.remove('hidden'); // Show word selection
+                chosenWordDisplay.textContent = "Eligiendo...";
 
-            startTimer(20, wordSelectTimerSpan, () => {
-                if (!currentChosenWord) {
-                    const randomWord = wordsToChoose[Math.floor(Math.random() * wordsToChoose.length)];
-                    handleWordSelected(randomWord);
-                    addChatMessage(gameChatMessages, null, `Tiempo agotado. Palabra seleccionada: ${randomWord}`, true);
-                }
-            }, "s restantes");
+                const wordsToChoose = getRandomWords(gameWords, 3);
+                wordsToChoose.forEach(word => {
+                    const button = document.createElement('button');
+                    button.textContent = word;
+                    button.classList.add('word-choice-button', 'bg-sky-500', 'hover:bg-sky-600', 'text-white', 'font-semibold', 'py-2', 'px-4', 'rounded-lg', 'transition');
+                    button.addEventListener('click', () => handleWordSelected(word));
+                    wordChoicesDiv.appendChild(button);
+                });
+
+                startTimer(20, wordSelectTimerSpan, () => { // Word selection timer
+                    if (!currentChosenWord) { // Auto-select if time runs out
+                        const randomWord = wordsToChoose[Math.floor(Math.random() * wordsToChoose.length)];
+                        handleWordSelected(randomWord);
+                        addChatMessage(gameChatMessages, null, `Tiempo agotado. Palabra seleccionada para ${currentDrawer}: ${randomWord}`, true);
+                    }
+                }, "s restantes");
+
+            } else { // If current client is a guesser
+                wordSelectionArea.classList.add('hidden'); // Guessers don't see word selection
+                drawingCanvas.classList.add('opacity-50', 'pointer-events-none'); // Guessers can't draw
+                chosenWordDisplay.textContent = "Adivina..."; // Placeholder for guessers
+                 addChatMessage(gameChatMessages, null, `${currentDrawer} está eligiendo una palabra...`, true);
+            }
             
+            updateScoresDisplay();
             navigateTo('game');
-            addChatMessage(lobbyChatMessages, null, `Gandalf ha iniciado la partida en modo desarrollador.`, true);
-            gameChatMessages.innerHTML = lobbyChatMessages.innerHTML;
+            // Transfer lobby chat to game chat only once when game starts for the user
+            if(gameChatMessages.children.length === 0 && lobbyChatMessages.children.length > 0){
+                 gameChatMessages.innerHTML = lobbyChatMessages.innerHTML;
+            }
         }
 
         function getRandomWords(sourceArray, count) {
@@ -441,19 +570,91 @@
         function handleWordSelected(word) {
             clearTimeout(wordSelectionTimerId); 
             currentChosenWord = word;
-            chosenWordDisplay.textContent = word.toUpperCase();
-            wordSelectionArea.classList.add('hidden');
             
-            drawingCanvas.classList.remove('opacity-50', 'pointer-events-none');
-            drawingCanvas.focus();
-
-            addChatMessage(gameChatMessages, null, `Gandalf ha elegido una palabra y va a dibujar.`, true);
-            startTimer(90, gameTimerSpan, () => {
-                addChatMessage(gameChatMessages, null, `¡Tiempo de dibujar ha terminado para Gandalf!`, true);
-                drawingCanvas.classList.add('opacity-50', 'pointer-events-none'); 
+            if (selectedUser === currentDrawer) { // Drawer sees the word
+                chosenWordDisplay.textContent = word.toUpperCase();
+                drawingCanvas.classList.remove('opacity-50', 'pointer-events-none'); // Enable drawing for drawer
+                drawingCanvas.focus();
+            } else { // Guessers don't see the word
+                chosenWordDisplay.textContent = "Adivina...";
+            }
+            
+            wordSelectionArea.classList.add('hidden');
+            addChatMessage(gameChatMessages, null, `${currentDrawer} ha elegido una palabra y va a dibujar.`, true);
+            
+            startTimer(90, gameTimerSpan, () => { // Drawing timer
+                if (!playersWhoGuessedThisTurn.includes(currentDrawer) && connectedPlayers.length === 1) { // If Gandalf didn't "guess" his own word in time
+                     addChatMessage(gameChatMessages, null, `¡Tiempo de dibujar ha terminado para ${currentDrawer}! La palabra era: ${currentChosenWord.toUpperCase()}`, true);
+                } else if (playersWhoGuessedThisTurn.length < (connectedPlayers.length > 1 ? connectedPlayers.length -1 : 1) ) {
+                     addChatMessage(gameChatMessages, null, `¡Tiempo de dibujar ha terminado para ${currentDrawer}! La palabra era: ${currentChosenWord.toUpperCase()}`, true);
+                }
+                endTurn();
             }, "s");
         }
+
+        function handleCorrectGuess(playerName) {
+            if (!currentChosenWord || playersWhoGuessedThisTurn.includes(playerName)) return;
+
+            playersWhoGuessedThisTurn.push(playerName);
+            
+            // Calculate points
+            const guesserPoints = Math.max(1, connectedPlayers.length - playersWhoGuessedThisTurn.length + 1);
+            playerScores[playerName] = (playerScores[playerName] || 0) + guesserPoints;
+            
+            // Drawer points (only if drawer is not the one who guessed, which is true for Gandalf mode)
+            if (currentDrawer && currentDrawer !== playerName) { // This condition will be false for Gandalf only mode.
+                 playerScores[currentDrawer] = (playerScores[currentDrawer] || 0) + 1;
+            } else if (currentDrawer && currentDrawer === playerName && connectedPlayers.length === 1) { // Gandalf guesses his own word
+                 playerScores[currentDrawer] = (playerScores[currentDrawer] || 0) + 1; // Drawer point
+            }
+
+
+            addChatMessage(gameChatMessages, null, `¡"${playerName}" ha adivinado la palabra! (+${guesserPoints} puntos)`, true, true);
+            updateScoresDisplay();
+
+            if (playerName === selectedUser) { // If the current client is the one who guessed
+                gameChatInput.disabled = true;
+                gameChatInput.placeholder = "¡Adivinaste!";
+            }
+
+            // Check if all guessers have guessed
+            const numberOfGuessers = connectedPlayers.length === 1 ? 1 : connectedPlayers.length -1; // In Gandalf mode, he is the only "guesser"
+            if (playersWhoGuessedThisTurn.length >= numberOfGuessers) {
+                clearTimeout(drawingTimerId); // Stop drawing timer
+                addChatMessage(gameChatMessages, null, `¡Todos adivinaron! La palabra era: ${currentChosenWord.toUpperCase()}`, true);
+                endTurn();
+            }
+        }
         
+        function endTurn() {
+            drawingCanvas.classList.add('opacity-50', 'pointer-events-none');
+            gameChatInput.disabled = true; // Disable chat for all at turn end briefly
+            gameChatInput.placeholder = "Turno terminado.";
+            chosenWordDisplay.textContent = currentChosenWord ? currentChosenWord.toUpperCase() : "ERROR";
+            
+            turnEndMessageDiv.textContent = `El turno ha terminado. La palabra era: ${currentChosenWord.toUpperCase()}.`;
+            turnEndMessageDiv.classList.remove('hidden');
+
+            // Simplified for Gandalf: He can just play again.
+            // In a real game, select next drawer.
+            if (selectedUser === "Gandalf") {
+                // Add a small delay then allow Gandalf to "start" a new turn (effectively restarting his own turn)
+                addChatMessage(gameChatMessages, null, "Prepara para el siguiente turno...", true);
+                setTimeout(() => {
+                    // For now, Gandalf just gets to choose a new word.
+                    // We could also navigate back to lobby or show a "Play Again" button.
+                    if (currentScreen === 'game') { // Ensure we are still in game screen
+                        currentDrawer = "Gandalf"; // Keep Gandalf as drawer
+                        currentChosenWord = null; // Reset chosen word for next selection
+                        initTurn(); // Re-initialize Gandalf's turn
+                    }
+                }, 5000); // 5 second delay
+            } else {
+                // Multi-player: server would handle next turn.
+            }
+        }
+
+
         function startTimer(duration, displayElement, onEndCallback, suffix = "s") {
             if (displayElement === wordSelectTimerSpan && wordSelectionTimerId) clearTimeout(wordSelectionTimerId);
             if (displayElement === gameTimerSpan && drawingTimerId) clearTimeout(drawingTimerId);
@@ -465,14 +666,17 @@
                 timeLeft--;
                 displayElement.textContent = `${timeLeft}${suffix}`;
                 if (timeLeft > 0) {
-                    if (displayElement === wordSelectTimerSpan) wordSelectionTimerId = setTimeout(tick, 1000);
-                    if (displayElement === gameTimerSpan) drawingTimerId = setTimeout(tick, 1000);
+                    const timer = setTimeout(tick, 1000);
+                    if (displayElement === wordSelectTimerSpan) wordSelectionTimerId = timer;
+                    if (displayElement === gameTimerSpan) drawingTimerId = timer;
                 } else {
                     displayElement.textContent = `0${suffix}`;
                     onEndCallback();
                 }
             }
-            tick();
+            const initialTimer = setTimeout(tick, 1000);
+            if (displayElement === wordSelectTimerSpan) wordSelectionTimerId = initialTimer;
+            if (displayElement === gameTimerSpan) drawingTimerId = initialTimer;
         }
 
         function handleBackToLobby() {
@@ -482,11 +686,16 @@
             drawingTimerId = null;
 
             currentChosenWord = null;
+            currentDrawer = null;
             chosenWordDisplay.textContent = "";
             wordSelectionArea.classList.add('hidden');
             gameTimerSpan.textContent = "--";
             wordSelectTimerSpan.textContent = "20";
-            drawingControlsDiv.classList.add('hidden'); // Hide drawing controls
+            drawingControlsDiv.classList.add('hidden'); 
+            gameChatInput.disabled = false;
+            gameChatInput.placeholder = "Adivina o comenta...";
+            turnEndMessageDiv.classList.add('hidden');
+
 
             localUserReady = false;
             const localPlayerEntry = connectedPlayers.find(p => p.name === selectedUser);
@@ -497,7 +706,7 @@
             startGameButton.classList.remove('bg-teal-500', 'cursor-not-allowed');
             startGameButton.classList.add('bg-orange-500', 'hover:bg-orange-600');
             
-            updateLobbyUI();
+            updateLobbyUI(); // This also calls updateScoresDisplay
             navigateTo('lobby');
             addChatMessage(lobbyChatMessages, null, `${selectedUser} ha vuelto al lobby.`, true);
         }
@@ -506,20 +715,16 @@
         function initCanvas() {
             canvas = drawingCanvas;
             ctx = canvas.getContext('2d');
-            
-            // Set default drawing styles
             ctx.strokeStyle = currentBrushColor;
             ctx.lineWidth = currentBrushSize;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
             canvas.style.backgroundColor = CANVAS_BACKGROUND_COLOR;
 
-
             canvas.addEventListener('mousedown', startDrawing);
             canvas.addEventListener('mousemove', draw);
             canvas.addEventListener('mouseup', stopDrawing);
             canvas.addEventListener('mouseout', stopDrawing); 
-
             canvas.addEventListener('touchstart', startDrawingTouch, { passive: false });
             canvas.addEventListener('touchmove', drawTouch, { passive: false });
             canvas.addEventListener('touchend', stopDrawingTouch);
@@ -527,8 +732,9 @@
         }
         
         function initDrawingControls() {
-            const colors = ['#000000', '#FF0000', '#0000FF', '#008000', '#FFFF00', '#FFFFFF']; // Black, Red, Blue, Green, Yellow, White (for eraser)
+            const colors = ['#000000', '#FF0000', '#0000FF', '#008000', '#FFFF00', '#FFFFFF']; 
             const colorNames = ['Negro', 'Rojo', 'Azul', 'Verde', 'Amarillo', 'Borrador (Blanco)'];
+            colorPaletteDiv.innerHTML = ''; // Clear previous buttons if any
 
             colors.forEach((color, index) => {
                 const button = document.createElement('button');
@@ -536,13 +742,13 @@
                 button.style.backgroundColor = color;
                 button.dataset.color = color;
                 button.setAttribute('aria-label', `Seleccionar color ${colorNames[index]}`);
-                if (color === currentBrushColor) button.classList.add('active');
+                if (color === currentBrushColor && !isEraserActive) button.classList.add('active');
                 
                 button.addEventListener('click', () => {
-                    isEraserActive = false; // Deactivate dedicated eraser if a color is picked
+                    isEraserActive = false; 
                     currentBrushColor = color;
                     ctx.strokeStyle = currentBrushColor;
-                    ctx.globalCompositeOperation = 'source-over'; // Reset composite operation
+                    ctx.globalCompositeOperation = 'source-over'; 
                     eraserButton.classList.remove('active');
                     updateActiveColorButton(button);
                 });
@@ -551,12 +757,10 @@
 
             eraserButton.addEventListener('click', () => {
                 isEraserActive = true;
-                // For a simple eraser on a white background, we draw with white.
-                // For a more advanced eraser, one might use 'destination-out'.
                 ctx.strokeStyle = CANVAS_BACKGROUND_COLOR; 
-                ctx.globalCompositeOperation = 'source-over'; // Or 'destination-out' if preferred and handled carefully
+                ctx.globalCompositeOperation = 'source-over'; 
                 eraserButton.classList.add('active');
-                updateActiveColorButton(null); // No color button is active when eraser is on
+                updateActiveColorButton(null); 
             });
 
             clearCanvasButton.addEventListener('click', clearCanvasFull);
@@ -565,7 +769,7 @@
                 currentBrushSize = e.target.value;
                 ctx.lineWidth = currentBrushSize;
             });
-            drawingControlsDiv.classList.add('hidden'); // Initially hidden
+            drawingControlsDiv.classList.add('hidden'); 
         }
 
         function updateActiveColorButton(activeButton) {
@@ -579,53 +783,43 @@
 
         function getMousePos(evt) {
             const rect = canvas.getBoundingClientRect();
-            return {
-                x: evt.clientX - rect.left,
-                y: evt.clientY - rect.top
-            };
+            return { x: evt.clientX - rect.left, y: evt.clientY - rect.top };
         }
         
         function getTouchPos(evt) {
             const rect = canvas.getBoundingClientRect();
-            return {
-                x: evt.touches[0].clientX - rect.left,
-                y: evt.touches[0].clientY - rect.top
-            };
+            return { x: evt.touches[0].clientX - rect.left, y: evt.touches[0].clientY - rect.top };
         }
 
         function startDrawing(e) {
-            if (e.buttons !== 1) return; 
+            if (e.buttons !== 1 || selectedUser !== currentDrawer) return; 
             drawing = true;
             const pos = getMousePos(e);
             [lastX, lastY] = [pos.x, pos.y];
         }
         
         function draw(e) {
-            if (!drawing || e.buttons !== 1) return;
+            if (!drawing || e.buttons !== 1 || selectedUser !== currentDrawer) return;
             const pos = getMousePos(e);
             ctx.beginPath(); 
             ctx.moveTo(lastX, lastY);
             ctx.lineTo(pos.x, pos.y);
-            ctx.lineWidth = currentBrushSize; // Apply current brush size
+            ctx.lineWidth = currentBrushSize; 
             if (isEraserActive) {
-                ctx.strokeStyle = CANVAS_BACKGROUND_COLOR; // Ensure eraser uses background color
-                // For 'destination-out' eraser:
-                // ctx.globalCompositeOperation = 'destination-out';
+                ctx.strokeStyle = CANVAS_BACKGROUND_COLOR; 
             } else {
                 ctx.strokeStyle = currentBrushColor;
-                // ctx.globalCompositeOperation = 'source-over';
             }
             ctx.stroke();
             [lastX, lastY] = [pos.x, pos.y];
         }
 
         function stopDrawing() {
-            if (drawing) {
-                drawing = false;
-            }
+            if (drawing) drawing = false;
         }
 
         function startDrawingTouch(e) {
+            if (selectedUser !== currentDrawer) return;
             e.preventDefault(); 
             drawing = true;
             const pos = getTouchPos(e);
@@ -633,43 +827,36 @@
         }
 
         function drawTouch(e) {
-            if (!drawing) return;
+            if (!drawing || selectedUser !== currentDrawer) return;
             e.preventDefault(); 
             const pos = getTouchPos(e);
             ctx.beginPath();
             ctx.moveTo(lastX, lastY);
             ctx.lineTo(pos.x, pos.y);
-            ctx.lineWidth = currentBrushSize; // Apply current brush size
+            ctx.lineWidth = currentBrushSize; 
              if (isEraserActive) {
                 ctx.strokeStyle = CANVAS_BACKGROUND_COLOR;
-                // ctx.globalCompositeOperation = 'destination-out';
             } else {
                 ctx.strokeStyle = currentBrushColor;
-                // ctx.globalCompositeOperation = 'source-over';
             }
             ctx.stroke();
             [lastX, lastY] = [pos.x, pos.y];
         }
 
         function stopDrawingTouch() {
-            if (drawing) {
-                drawing = false;
-            }
+            if (drawing) drawing = false;
         }
 
         function clearCanvasFull() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            // Optional: If you want to ensure the background is explicitly redrawn (e.g. if it's not white or if using transparency)
-            // ctx.fillStyle = CANVAS_BACKGROUND_COLOR;
-            // ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
-            // Reset to default drawing tool (e.g., black pen)
             isEraserActive = false;
             currentBrushColor = '#000000';
             ctx.strokeStyle = currentBrushColor;
             ctx.globalCompositeOperation = 'source-over';
             eraserButton.classList.remove('active');
-            updateActiveColorButton(document.querySelector('#color-palette .color-button[data-color="#000000"]'));
+            const blackButton = document.querySelector('#color-palette .color-button[data-color="#000000"]');
+            if (blackButton) updateActiveColorButton(blackButton);
+            else if (colorPaletteDiv.firstChild) updateActiveColorButton(colorPaletteDiv.firstChild); // Fallback
         }
 
     </script>

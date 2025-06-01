@@ -153,6 +153,7 @@
             <div>
                 <h2 class="text-xl sm:text-3xl font-bold text-green-400">¡A Dibujar!</h2>
                 <p class="text-sm text-slate-300">Turno de: <span id="game-current-drawer" class="font-semibold text-sky-300"></span></p>
+                <p class="text-sm text-slate-400">Turno actual: <span id="turn-counter">--/--</span></p>
             </div>
             <div class="text-right">
                 <p id="game-score-display" class="text-md sm:text-lg text-amber-400">Puntos: <span id="current-player-score">0</span></p>
@@ -219,8 +220,8 @@
         "Frodo", "Arwen", "Gandalf", "Galadriel", "Aragorn", "Sam", "Gimli",
         "Pippin", "Merry", "Legolas", "Saruman", "Elrond", "Boromir", "Bilbo"
     ];
-    let currentChosenWord = ""; // La palabra que el dibujante conoce
-    let wordToGuess = "";       // La palabra que se revela al final del turno
+    let currentChosenWord = "";
+    let wordToGuess = "";
     let wordSelectionTimerId = null;
     let drawingTimerId = null;
     let currentDrawer = null;
@@ -229,7 +230,7 @@
     let connectedPlayersFromServer = [];
     let localUserIsReady = false;
     let playerScores = {};
-    let playersWhoGuessedThisTurn = []; // Nombres de usuarios que adivinaron en el turno actual
+    let playersWhoGuessedThisTurn = [];
 
     // Canvas state
     let canvas, ctx;
@@ -271,6 +272,7 @@
     const gameCurrentDrawerSpan = document.getElementById('game-current-drawer');
     const gameTimerSpan = document.getElementById('game-timer');
     const currentPlayerScoreSpan = document.getElementById('current-player-score');
+    const turnCounterSpan = document.getElementById('turn-counter');
     const wordSelectionArea = document.getElementById('word-selection-area');
     const wordChoicesDiv = document.getElementById('word-choices');
     const wordSelectTimerSpan = document.getElementById('word-select-timer');
@@ -364,8 +366,7 @@
                 currentDrawer = message.payload.drawerUsername;
                 wordToGuess = "";
                 playersWhoGuessedThisTurn = [];
-                gameChatInput.disabled = (selectedUser === currentDrawer);
-                gameChatInput.placeholder = (selectedUser === currentDrawer) ? "Estás dibujando..." : "Adivina la palabra...";
+                turnCounterSpan.textContent = `${message.payload.totalTurnsCompleted || '?'}/${message.payload.maxTurns || '?'}`; // FUNCIONALIDAD B
                 initTurn(message.payload.wordsToChoose || [], message.payload.duration || 20);
                 break;
             case "drawingPhaseStart":
@@ -378,7 +379,6 @@
                     navigateTo('game');
                 }
 
-                // gameChatMessages.innerHTML = ''; // Limpiado en initTurn
                 addChatMessage(gameChatMessages, null, `${currentDrawer} va a dibujar.`, true);
 
                 if (selectedUser === currentDrawer) {
@@ -388,16 +388,16 @@
                     drawingControlsDiv.classList.remove('hidden');
                     drawingCanvas.focus();
                     addChatMessage(gameChatMessages, null, `¡Tu palabra es "${currentChosenWord.toUpperCase()}"! Comienza a dibujar.`, true);
-                } else {
+                } else { // Adivinador
                     chosenWordDisplay.textContent = "Adivina...";
-                    drawingCanvas.classList.add('opacity-50', 'pointer-events-none');
+                    drawingCanvas.classList.remove('opacity-50');
+                    drawingCanvas.classList.add('pointer-events-none');
                     drawingControlsDiv.classList.add('hidden');
                     addChatMessage(gameChatMessages, null, `${currentDrawer} ha comenzado a dibujar. ¡Adivina!`, true);
                 }
                 wordSelectionArea.classList.add('hidden');
                 startTimer(drawingDuration, gameTimerSpan, () => {
                     // El servidor enviará "turnOver" si el tiempo se acaba.
-                    // No es necesario un mensaje local aquí, ya que el servidor lo gestionará.
                 }, "s");
                 break;
             case "drawAction":
@@ -411,12 +411,10 @@
                     gameChatInput.disabled = true;
                     gameChatInput.placeholder = "¡Adivinaste!";
                 }
-                playersWhoGuessedThisTurn.push(message.payload.guesserUsername); // Mantener registro local
-                // La actualización de puntajes vendrá con 'scoreUpdate'
+                playersWhoGuessedThisTurn.push(message.payload.guesserUsername);
                 if (message.payload.isTurnOver && message.payload.wordRevealed) {
                     wordToGuess = message.payload.wordRevealed;
                     chosenWordDisplay.textContent = wordToGuess.toUpperCase();
-                    // El mensaje de "turnOver" del servidor manejará el mensaje final del turno.
                 }
                 break;
             case "scoreUpdate":
@@ -426,7 +424,7 @@
                 break;
             case "turnOver":
                 console.log("[CLIENT] turnOver payload:", message.payload);
-                clearTimeout(drawingTimerId); // Detener temporizador de dibujo local
+                clearTimeout(drawingTimerId);
                 drawingTimerId = null;
                 wordToGuess = message.payload.wordRevealed;
                 chosenWordDisplay.textContent = wordToGuess.toUpperCase();
@@ -435,13 +433,12 @@
                 turnEndMessageDiv.classList.remove('hidden');
                 gameChatInput.disabled = true;
                 drawingCanvas.classList.add('opacity-50', 'pointer-events-none');
-                // Esperar 'assignDrawerAndWords' para el siguiente turno
                 break;
             case "gameOver":
                 console.log("[CLIENT] gameOver payload:", message.payload);
-                clearTimeout(drawingTimerId); // Asegurarse que los timers estén limpios
+                clearTimeout(drawingTimerId);
                 clearTimeout(wordSelectionTimerId);
-                playerScores = message.payload.scores || {}; // Actualizar puntajes finales
+                playerScores = message.payload.scores || {};
                 gameOverReasonP.textContent = message.payload.reason || "El juego ha finalizado.";
                 finalScoresListUl.innerHTML = '';
 
@@ -676,17 +673,24 @@
         chosenWordDisplay.textContent = "";
         wordSelectionArea.classList.add('hidden');
         drawingControlsDiv.classList.add('hidden');
-        gameChatInput.disabled = (selectedUser === currentDrawer);
-        gameChatInput.placeholder = (selectedUser === currentDrawer) ? "Estás dibujando..." : "Adivina la palabra...";
+
+        const amIDrawer = selectedUser === currentDrawer;
+        const haveIGuessed = playersWhoGuessedThisTurn.includes(selectedUser);
+        gameChatInput.disabled = amIDrawer || haveIGuessed;
+        gameChatInput.placeholder = amIDrawer ? "Estás dibujando..." : (haveIGuessed ? "¡Ya adivinaste!" : "Adivina la palabra...");
+
+
         turnEndMessageDiv.classList.add('hidden');
         turnEndMessageDiv.textContent = '';
-        playersWhoGuessedThisTurn = [];
+        // playersWhoGuessedThisTurn = []; // Reset by server via assignDrawerAndWords or here if needed before first guess
+
         clearCanvasFull();
 
         if (selectedUser === currentDrawer) {
             wordSelectionArea.classList.remove('hidden');
             chosenWordDisplay.textContent = "Eligiendo...";
             wordChoicesDiv.innerHTML = '';
+            drawingCanvas.classList.add('opacity-50', 'pointer-events-none');
 
             if (wordsToChooseByServer.length > 0) {
                 wordsToChooseByServer.forEach(word => {
@@ -708,9 +712,9 @@
             } else {
                 chosenWordDisplay.textContent = "Esperando palabras del servidor...";
             }
-        } else {
-            drawingControlsDiv.classList.add('hidden');
-            drawingCanvas.classList.add('opacity-50', 'pointer-events-none');
+        } else { // Adivinador
+            drawingCanvas.classList.remove('opacity-50');
+            drawingCanvas.classList.add('pointer-events-none');
             wordSelectionArea.classList.add('hidden');
             chosenWordDisplay.textContent = "Adivina...";
             gameChatInput.disabled = false;
@@ -755,6 +759,7 @@
         chosenWordDisplay.textContent = "";
         wordSelectionArea.classList.add('hidden');
         gameTimerSpan.textContent = "--";
+        turnCounterSpan.textContent = "--/--";
         wordSelectTimerSpan.textContent = "20";
         drawingControlsDiv.classList.add('hidden');
         gameChatInput.disabled = false;
@@ -943,7 +948,13 @@
         }
     }
     function clearCanvasFull() {
-        if (selectedUser !== currentDrawer && currentScreen === 'game') return;
+        if (selectedUser !== currentDrawer && currentScreen === 'game' && !drawingCanvas.classList.contains('pointer-events-none') ) {
+            // Adivinador no debería poder limpiar explícitamente si no es su turno de dibujar.
+            // Esta función es llamada por initTurn para todos, y por el dibujante.
+            // Si no es el dibujante, solo limpiar el canvas.
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            return;
+        }
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         if (selectedUser === currentDrawer) {
             isEraserActive = false; currentBrushColor = '#000000';

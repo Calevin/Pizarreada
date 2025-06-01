@@ -106,9 +106,11 @@ type UserDetails struct {
 
 // AssignDrawerPayload to send words to the dibujante.
 type AssignDrawerPayload struct {
-	DrawerUsername string   `json:"drawerUsername"`
-	WordsToChoose  []string `json:"wordsToChoose,omitempty"` // Only for the dibujante
-	Duration       int      `json:"duration,omitempty"`      // Time to choose a word
+	DrawerUsername      string   `json:"drawerUsername"`
+	WordsToChoose       []string `json:"wordsToChoose,omitempty"` // Only for the dibujante
+	Duration            int      `json:"duration,omitempty"`      // Time to choose a word
+	TotalTurnsCompleted int      `json:"totalTurnsCompleted"`
+	MaxTurns            int      `json:"maxTurns"`
 }
 
 // WordChosenPayload when the dibujante chooses a word.
@@ -170,10 +172,11 @@ type TurnOverPayload struct {
 
 func newGameState() *GameState {
 	return &GameState{
-		gameInProgress:     false,
-		currentPlayerIndex: -1, // No one is drawing initially
-		scores:             make(map[string]int),
-		playerDrawCounts:   make(map[string]int),
+		gameInProgress:            false,
+		currentPlayerIndex:        -1, // No one is drawing initially
+		scores:                    make(map[string]int),
+		playerDrawCounts:          make(map[string]int),
+		playersWhoGuessedThisTurn: make(map[string]bool),
 	}
 }
 
@@ -333,9 +336,11 @@ func (h *Hub) startGame() {
 		log.Println("Intento de iniciar juego, pero ya está en progreso.")
 		return
 	}
-
-	h.mu.Lock() // Lock hub to securely access h.clients
+	h.mu.Lock()
 	var readyPlayers []*Client
+	h.gameState.scores = make(map[string]int)           // Reset scores for a new game
+	h.gameState.playerDrawCounts = make(map[string]int) // Reset draw counts
+
 	for client := range h.clients {
 		client.mu.Lock()
 		if client.username != "" && client.isReady {
@@ -396,7 +401,9 @@ func (h *Hub) assignNextDrawer() {
 		return
 	}
 
-	if h.gameState.totalTurnsCompleted >= h.gameState.maxTurns {
+	h.gameState.totalTurnsCompleted++ // Increment before checking to count the current turn
+
+	if h.gameState.totalTurnsCompleted > h.gameState.maxTurns {
 		log.Println("Todas las rondas completadas. Fin del juego.")
 		h.gameState.gameInProgress = false
 		h.broadcastGameEnd("Todas las rondas completadas.")
@@ -422,7 +429,7 @@ func (h *Hub) assignNextDrawer() {
 		h.gameState.wordSelectionTimer.Stop()
 	}
 	h.gameState.wordSelectionTimer = time.NewTimer(wordSelectionDuration)
-	go func(drawerName string) {
+	go func(drawerName string, currentTurn int) {
 		<-h.gameState.wordSelectionTimer.C
 		h.gameState.mu.Lock()
 		defer h.gameState.mu.Unlock()
@@ -433,12 +440,14 @@ func (h *Hub) assignNextDrawer() {
 			// Simulate that the cartoonist chose this word
 			h.handleWordChosen(drawerName, randomWord)
 		}
-	}(h.gameState.currentDrawerUsername)
+	}(h.gameState.currentDrawerUsername, h.gameState.totalTurnsCompleted)
 
 	drawerPayload := AssignDrawerPayload{
-		DrawerUsername: h.gameState.currentDrawerUsername,
-		WordsToChoose:  wordsToChoose,
-		Duration:       int(wordSelectionDuration.Seconds()),
+		DrawerUsername:      h.gameState.currentDrawerUsername,
+		WordsToChoose:       wordsToChoose,
+		Duration:            int(wordSelectionDuration.Seconds()),
+		TotalTurnsCompleted: h.gameState.totalTurnsCompleted,
+		MaxTurns:            h.gameState.maxTurns,
 	}
 	drawerPayloadBytes, _ := json.Marshal(drawerPayload)
 	drawerMsg := Message{Type: "assignDrawerAndWords", Payload: drawerPayloadBytes}
@@ -452,7 +461,11 @@ func (h *Hub) assignNextDrawer() {
 		log.Printf("Error al enviar assignDrawerAndWords a %s: canal bloqueado", drawerClient.username)
 	}
 
-	guesserPayload := AssignDrawerPayload{DrawerUsername: h.gameState.currentDrawerUsername}
+	guesserPayload := AssignDrawerPayload{
+		DrawerUsername:      h.gameState.currentDrawerUsername,
+		TotalTurnsCompleted: h.gameState.totalTurnsCompleted,
+		MaxTurns:            h.gameState.maxTurns,
+	}
 	guesserPayloadBytes, _ := json.Marshal(guesserPayload)
 	guesserMsg := Message{Type: "assignDrawerAndWords", Payload: guesserPayloadBytes}
 	guesserMsgBytes, _ := json.Marshal(guesserMsg)
@@ -532,17 +545,18 @@ func (h *Hub) handleWordChosen(drawerUsername string, chosenWord string) {
 		h.gameState.turnTimer.Stop()
 	}
 	h.gameState.turnTimer = time.NewTimer(drawingDuration)
-	go func(currentWordForTimer string) {
+	go func(currentWordForTimer string, turnNumber int) {
 		<-h.gameState.turnTimer.C
 		h.gameState.mu.Lock()
 		defer h.gameState.mu.Unlock()
-		if h.gameState.gameInProgress && h.gameState.currentWord == currentWordForTimer { // Make sure the turn has not changed
+		// Make sure the turn has not changed
+		if h.gameState.gameInProgress && h.gameState.currentWord == currentWordForTimer && h.gameState.totalTurnsCompleted == turnNumber {
 			log.Printf("Tiempo de dibujo agotado para %s. Palabra: %s", h.gameState.currentDrawerUsername, currentWordForTimer)
 			h.broadcastTurnOver("Tiempo agotado", currentWordForTimer)
 			h.gameState.totalTurnsCompleted++
 			h.assignNextDrawer()
 		}
-	}(h.gameState.currentWord)
+	}(h.gameState.currentWord, h.gameState.totalTurnsCompleted)
 }
 
 // getRandomWords returns a list of words from the gameWords list.
@@ -592,7 +606,6 @@ func (h *Hub) broadcastGameEnd(reason string) {
 	h.gameState.currentWord = ""
 	h.gameState.playerOrder = nil
 	h.gameState.currentPlayerIndex = -1
-	h.gameState.scores = make(map[string]int)
 	h.gameState.playerDrawCounts = make(map[string]int)
 	h.gameState.totalTurnsCompleted = 0
 	if h.gameState.turnTimer != nil {
@@ -627,9 +640,11 @@ func (h *Hub) broadcastTurnOver(reason string, word string) {
 }
 
 // handleGuessAttempt is called when a guess is made by a client.
-func (h *Hub) handleGuessAttempt(guesserClient *Client, guess string) {
+func (h *Hub) handleGuessAttempt(guesserClient *Client, guess string) (isCorrectGuess bool) {
 	h.gameState.mu.Lock()
 	defer h.gameState.mu.Unlock()
+
+	isCorrectGuess = false
 
 	if !h.gameState.gameInProgress || guesserClient.username == h.gameState.currentDrawerUsername || h.gameState.playersWhoGuessedThisTurn[guesserClient.username] {
 		return // Game not active, dibujante cannot guess, or has already guessed
@@ -639,32 +654,31 @@ func (h *Hub) handleGuessAttempt(guesserClient *Client, guess string) {
 	normalizedCurrentWord := normalizeString(h.gameState.currentWord)
 
 	if normalizedGuess == normalizedCurrentWord {
+		isCorrectGuess = true
 		log.Printf("¡Adivinanza correcta de %s! Palabra: %s", guesserClient.username, h.gameState.currentWord)
 		h.gameState.playersWhoGuessedThisTurn[guesserClient.username] = true
 
-		// Calcular puntos
+		// Calculate points
 		pointsForGuesser := 0
-		h.mu.Lock() // To count active players (adivinadores)
-		activeGuessers := 0
+		h.mu.Lock()             // To count active players (adivinadores)
+		activePlayersCount := 0 //Total active players in the game
 		for c := range h.clients {
 			c.mu.Lock()
-			if c.username != "" && c.username != h.gameState.currentDrawerUsername {
-				activeGuessers++
+			if c.username != "" {
+				activePlayersCount++
 			}
 			c.mu.Unlock()
 		}
 		h.mu.Unlock()
-		if activeGuessers == 0 {
-			activeGuessers = 1
-		} // Avoid division by zero if only the dibujante is present (Gandalf mode)
-
-		// Points = total advinadores - (how many already guessed before this one) + 1
-		// Base points is the number of adivinadores.
-		// The first adivinador gets `activeGuessers` points.
-		// The second `activeGuessers - 1`, etc., minimum 1.
-		pointsForGuesser = activeGuessers - (len(h.gameState.playersWhoGuessedThisTurn) - 1)
-		if pointsForGuesser < 1 {
+		if activePlayersCount <= 1 {
 			pointsForGuesser = 1
+		} else {
+			// Points = total advinadores - (how many already guessed before this one) + 1
+			// Base points is the number of adivinadores.
+			pointsForGuesser = len(h.gameState.playerOrder) - (len(h.gameState.playersWhoGuessedThisTurn) - 1)
+			if pointsForGuesser < 1 {
+				pointsForGuesser = 1
+			}
 		}
 
 		h.gameState.scores[guesserClient.username] += pointsForGuesser
@@ -672,15 +686,15 @@ func (h *Hub) handleGuessAttempt(guesserClient *Client, guess string) {
 
 		h.broadcastScoreUpdate()
 
-		isTurnOver := h.checkIfAllGuessed() // This function can also end the turn
+		turnOverByGuess := h.checkIfAllGuessed() // This function can also end the turn
 
 		correctGuessPayload := GuessCorrectPayload{
 			GuesserUsername: guesserClient.username,
 			PointsGuesser:   pointsForGuesser,
 			PointsDrawer:    1, // Points the dibujante earns for THIS riddle
-			IsTurnOver:      isTurnOver,
+			IsTurnOver:      turnOverByGuess,
 		}
-		if isTurnOver {
+		if turnOverByGuess {
 			correctGuessPayload.WordRevealed = h.gameState.currentWord
 		}
 		payloadBytes, _ := json.Marshal(correctGuessPayload)
@@ -690,29 +704,25 @@ func (h *Hub) handleGuessAttempt(guesserClient *Client, guess string) {
 
 		// If the turn ended because everyone guessed, assignNextDrawer was already called by checkIfAllGuessed
 	}
+	return
 }
 
 // checkIfAllGuessed check if all the adivinadores have guessed correctly.
 // Returns true if the turn ended as a result, false otherwise.
 // gameState.mu MUST be blocked before calling.
 func (h *Hub) checkIfAllGuessed() bool {
+	// gameState.mu should be blocked by now
 	if !h.gameState.gameInProgress {
 		return false
 	}
 	h.mu.Lock() // To count clients
 	numPotentialGuessers := 0
-	for client := range h.clients {
-		client.mu.Lock()
-		if client.username != "" && client.username != h.gameState.currentDrawerUsername {
+	for _, client := range h.gameState.playerOrder { // Iterate over the players in the current game
+		if client.username != h.gameState.currentDrawerUsername {
 			numPotentialGuessers++
 		}
-		client.mu.Unlock()
 	}
 	h.mu.Unlock()
-
-	if numPotentialGuessers == 0 && len(h.gameState.playerOrder) == 1 { // Gandalf case only
-		numPotentialGuessers = 1 // Gandalf is his own adivinador
-	}
 
 	if len(h.gameState.playersWhoGuessedThisTurn) >= numPotentialGuessers && numPotentialGuessers > 0 {
 		log.Printf("Todos los %d adivinadores han acertado. Terminando turno.", numPotentialGuessers)
@@ -744,7 +754,6 @@ func (c *Client) readPump() {
 			log.Printf("Error JSON de %s: %v. Msg: %s", c.username, err, string(rawMessage))
 			continue
 		}
-		log.Printf("Mensaje recibido de %s: Tipo=%s", c.username, msg.Type)
 
 		switch msg.Type {
 		case "userIdentify":
@@ -760,28 +769,29 @@ func (c *Client) readPump() {
 			log.Printf("Usuario identificado: %s", c.username)
 			c.hub.broadcastUserList() // Notify everyone about the new user/updated list
 		case "chatMessage": // It can be a normal chat or a guessing attempt.
-			log.Printf("chatMessage...")
 			var payload ChatPayload
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 				log.Printf("Error al decodificar ChatPayload: %v", err)
 				continue
 			}
+
+			isCorrectGuess := false
 			c.hub.gameState.mu.Lock()
 			isGameChat := c.hub.gameState.gameInProgress && c.username != c.hub.gameState.currentDrawerUsername && !c.hub.gameState.playersWhoGuessedThisTurn[c.username]
 			currentWordExists := c.hub.gameState.currentWord != ""
-			c.hub.gameState.mu.Unlock()
+			c.hub.gameState.mu.Unlock() //Unlock before calling handleGuessAttempt which also blocks
 
-			if isGameChat && currentWordExists { // It's an attempt at a guess
-				c.hub.handleGuessAttempt(c, payload.Message)
+			if isGameChat && currentWordExists {
+				isCorrectGuess = c.hub.handleGuessAttempt(c, payload.Message)
 			}
-			// Always retransmit the chat message (even if it was a guess, so it can be seen)
-			// Add the server username to ensure it is correct
-			payload.Username = c.username // Overwrite in case the client sends another one
-			chatPayloadBytes, _ := json.Marshal(payload)
-			// Repackage the message for transmission, ensuring that the type is correct.
-			finalMsg := Message{Type: "chatMessage", Payload: chatPayloadBytes}
-			finalMsgBytes, _ := json.Marshal(finalMsg)
-			c.hub.broadcast <- finalMsgBytes
+
+			if !isCorrectGuess { // Only rebroadcast if it was not a correct guess
+				payload.Username = c.username
+				chatBytes, _ := json.Marshal(payload)
+				finalMsg := Message{Type: "chatMessage", Payload: chatBytes}
+				finalBytes, _ := json.Marshal(finalMsg)
+				c.hub.broadcast <- finalBytes
+			}
 
 		case "playerReady":
 			var payload ReadyPayload
@@ -862,8 +872,6 @@ func (c *Client) readPump() {
 			c.hub.gameState.mu.Lock()
 			// Only the current dibujante can submit drawing actions.
 			if c.username == c.hub.gameState.currentDrawerUsername && c.hub.gameState.gameInProgress {
-				// Repackage the message to ensure the type is correct and add username if necessary
-				// Extract the original payload from DrawActionPayload
 				var drawPayload DrawActionPayload
 				if err := json.Unmarshal(msg.Payload, &drawPayload); err != nil {
 					log.Printf("Error al decodificar DrawActionPayload: %v", err)
@@ -913,7 +921,6 @@ func (c *Client) readPump() {
 	}
 }
 
-// writePump pumps messages from the hub to the WebSocket connection.
 func (c *Client) writePump() {
 	// Configure ticker for pings if necessary
 	// ticker := time.NewTicker(pingPeriod)

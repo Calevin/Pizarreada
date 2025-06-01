@@ -231,7 +231,6 @@ func (h *Hub) run() {
 							h.gameState.turnTimer.Stop()
 						}
 						h.broadcastTurnOver("El dibujante se desconectó.", h.gameState.currentWord)
-						h.gameState.totalTurnsCompleted++
 						h.assignNextDrawer() // Try to move on to the next one
 					} else {
 						// If you were a adivinador, check if everyone else has already guessed.
@@ -553,7 +552,6 @@ func (h *Hub) handleWordChosen(drawerUsername string, chosenWord string) {
 		if h.gameState.gameInProgress && h.gameState.currentWord == currentWordForTimer && h.gameState.totalTurnsCompleted == turnNumber {
 			log.Printf("Tiempo de dibujo agotado para %s. Palabra: %s", h.gameState.currentDrawerUsername, currentWordForTimer)
 			h.broadcastTurnOver("Tiempo agotado", currentWordForTimer)
-			h.gameState.totalTurnsCompleted++
 			h.assignNextDrawer()
 		}
 	}(h.gameState.currentWord, h.gameState.totalTurnsCompleted)
@@ -730,7 +728,6 @@ func (h *Hub) checkIfAllGuessed() bool {
 			h.gameState.turnTimer.Stop()
 		}
 		h.broadcastTurnOver("Todos adivinaron", h.gameState.currentWord)
-		h.gameState.totalTurnsCompleted++
 		h.assignNextDrawer()
 		return true
 	}

@@ -407,12 +407,12 @@
             case "guessCorrect":
                 console.log("[CLIENT] guessCorrect payload:", message.payload);
                 addChatMessage(gameChatMessages, null, `¡${message.payload.guesserUsername} ha adivinado! (+${message.payload.pointsGuesser} puntos para ${message.payload.guesserUsername}, +${message.payload.pointsDrawer} para ${currentDrawer})`, true, true);
-                if (message.payload.guesserUsername === selectedUser) {
+                if ((message.payload.guesserUsername === selectedUser) && (!message.payload.isTurnOver)) {
                     gameChatInput.disabled = true;
                     gameChatInput.placeholder = "¡Adivinaste!";
                 }
                 playersWhoGuessedThisTurn.push(message.payload.guesserUsername);
-                if (message.payload.isTurnOver && message.payload.wordRevealed) {
+                if (message.payload.isTurnOver) {
                     wordToGuess = message.payload.wordRevealed;
                     chosenWordDisplay.textContent = wordToGuess.toUpperCase();
                 }

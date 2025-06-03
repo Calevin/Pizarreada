@@ -526,14 +526,16 @@
             if (connectedPlayersFromServer.find(p => p.username === name) || playerScores[name] !== undefined) {
                 const li = document.createElement('li');
                 li.classList.add('score-entry', 'p-1', 'rounded-md');
-                li.textContent = `${name}: ${score} puntos`;
+                li.textContent = `${name}: ${score || 0} puntos`;
                 if (name === selectedUser) li.classList.add('text-sky-300', 'font-bold');
                 playerScoresLobbyUl.appendChild(li);
             }
         });
         if (selectedUser && playerScores.hasOwnProperty(selectedUser)) {
-            currentPlayerScoreSpan.textContent = playerScores[selectedUser];
-        } else {
+            currentPlayerScoreSpan.textContent = playerScores[selectedUser] || '0';
+        } else if (selectedUser) { // If selectedUser exists but not its score yet
+            currentPlayerScoreSpan.textContent = '0';
+        } else { // If there is no selectedUser
             currentPlayerScoreSpan.textContent = '0';
         }
     }
@@ -590,7 +592,6 @@
             lobbyUsername.textContent = selectedUser;
             localUserIsReady = false;
             sendWsMessage("userIdentify", { username: selectedUser });
-            if (!playerScores.hasOwnProperty(selectedUser)) playerScores[selectedUser] = 0;
             updateScoresDisplay();
             navigateTo('lobby');
         } else {

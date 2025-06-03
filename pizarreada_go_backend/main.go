@@ -809,6 +809,17 @@ func (c *Client) readPump() {
 			c.mu.Unlock()
 			log.Printf("Usuario identificado: %s", c.username)
 			c.hub.broadcastUserList() // Notify everyone about the new user/updated list
+
+			c.hub.gameState.mu.Lock()
+			if c.hub.gameState.gameInProgress {
+				// If a game is in progress, a score update will be sent.
+				// This ensures that the reconnecting player receives their current score.
+				// And everyone else is in sync too.
+				log.Printf("Juego en progreso, enviando actualización de puntajes tras identificación de %s.", payload.Username)
+				c.hub.broadcastScoreUpdate() // expect gameState.mu to be blocked.
+			}
+			c.hub.gameState.mu.Unlock()
+
 		case "chatMessage": // It can be a normal chat or a guessing attempt.
 			var payload ChatPayload
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {

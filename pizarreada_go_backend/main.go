@@ -46,7 +46,8 @@ type GameState struct {
 	wordSelectionTimer        *time.Timer     // Timer for word selection
 	playerDrawCounts          map[string]int  // Times each player has drawn
 	totalTurnsCompleted       int
-	maxTurns                  int // It will be calculated based on players and turnsPerPlayer
+	maxTurns                  int               // It will be calculated based on players and turnsPerPlayer
+	currentTurnDrawActions    []json.RawMessage // Stores the payloads of the turn's drawAction messages
 	mu                        sync.Mutex
 }
 
@@ -178,6 +179,7 @@ func newGameState() *GameState {
 		scores:                    make(map[string]int),
 		playerDrawCounts:          make(map[string]int),
 		playersWhoGuessedThisTurn: make(map[string]bool),
+		currentTurnDrawActions:    make([]json.RawMessage, 0),
 	}
 }
 
@@ -418,8 +420,9 @@ func (h *Hub) assignNextDrawer() {
 	h.gameState.playerDrawCounts[drawerClient.username]++ // Increase drawing count for this player
 	drawerClient.mu.Unlock()
 
-	h.gameState.currentWord = ""                                  // Reset current word
-	h.gameState.playersWhoGuessedThisTurn = make(map[string]bool) // Reset for the new turn
+	h.gameState.currentWord = ""                                    // Reset current word
+	h.gameState.playersWhoGuessedThisTurn = make(map[string]bool)   // Reset for the new turn
+	h.gameState.currentTurnDrawActions = make([]json.RawMessage, 0) // Clear drawing history
 
 	log.Printf("Asignando dibujante: %s (Turno %d/%d, Dibujo #%d para este jugador)", h.gameState.currentDrawerUsername, h.gameState.totalTurnsCompleted, h.gameState.maxTurns, h.gameState.playerDrawCounts[h.gameState.currentDrawerUsername])
 	wordsToChoose := h.getRandomWords(3)
@@ -869,7 +872,14 @@ func (c *Client) readPump() {
 				currentDrawer := c.hub.gameState.currentDrawerUsername
 				turnsCompleted := c.hub.gameState.totalTurnsCompleted
 				maxTurnsGame := c.hub.gameState.maxTurns
-				c.hub.gameState.mu.Unlock() // Desbloquear gameState aquí, ya tenemos los datos que necesitamos.
+				// Copy drawing actions (It's best to copy the actions here while gameState.mu is locked)
+				var actionsToSync []json.RawMessage
+				if len(c.hub.gameState.currentTurnDrawActions) > 0 {
+					actionsToSync = make([]json.RawMessage, len(c.hub.gameState.currentTurnDrawActions))
+					copy(actionsToSync, c.hub.gameState.currentTurnDrawActions)
+				}
+
+				c.hub.gameState.mu.Unlock() // Unlock gameState here, we already have the data we need for assignDrawerAndWords and the actions.
 
 				log.Printf("Jugador %s está listo (%t), juego en curso. Enviando estado para unirse.", currentPlayerUsername, isNowReady)
 
@@ -894,6 +904,34 @@ func (c *Client) readPump() {
 						select {
 						case c.send <- msgToJoinBytes:
 							log.Printf("Enviado assignDrawerAndWords a %s para unirse a partida en curso.", currentPlayerUsername)
+
+							// Send drawing history after assignDrawerAndWords
+							if len(actionsToSync) > 0 {
+								log.Printf("Enviando %d acciones de dibujo acumuladas a %s.", len(actionsToSync), currentPlayerUsername)
+								for i, actionPayload := range actionsToSync {
+									// actionPayload is already a json.RawMessage
+									syncDrawMsg := Message{Type: "drawAction", Payload: actionPayload}
+									syncDrawMsgBytes, err := json.Marshal(syncDrawMsg)
+									if err != nil {
+										log.Printf("Error al serializar syncDrawMsg #%d para %s: %v", i+1, currentPlayerUsername, err)
+										continue // Skip this action if there is a serialization error
+									}
+
+									// Send to client 'c'
+									select {
+									case c.send <- syncDrawMsgBytes:
+										// log.Printf("Enviada acción de dibujo acumulada #%d a %s", i+1, currentPlayerUsername) // Puede ser muy verboso
+									default:
+										log.Printf("Error al enviar acción de dibujo acumulada #%d a %s: canal bloqueado. Deteniendo sincronización de dibujo para este jugador.", i+1, currentPlayerUsername)
+										// If the channel is blocked, the client has probably disconnected,
+										goto endDrawingSyncForPlayer // Use goto to exit the action dispatch loop
+									}
+								}
+							}
+						endDrawingSyncForPlayer: // Tag for the goto
+							log.Printf("Sincronización de dibujo completada para %s.", currentPlayerUsername)
+						// End of sending drawing history
+
 						default:
 							log.Printf("Error al enviar assignDrawerAndWords a %s para unirse: canal bloqueado.", currentPlayerUsername)
 						}
@@ -1051,30 +1089,21 @@ func (c *Client) readPump() {
 			c.hub.gameState.mu.Lock()
 			// Only the current dibujante can submit drawing actions.
 			if c.username == c.hub.gameState.currentDrawerUsername && c.hub.gameState.gameInProgress {
-				var drawPayload DrawActionPayload
-				if err := json.Unmarshal(msg.Payload, &drawPayload); err != nil {
-					log.Printf("Error al decodificar DrawActionPayload: %v", err)
-					c.hub.gameState.mu.Unlock()
-					continue
-				}
-				drawPayload.Username = c.username // Ensure the dibujante's username is in the payload
+				rawDrawPayload := msg.Payload
 
-				// Re-serialize the payload
-				enrichedPayloadBytes, err := json.Marshal(drawPayload)
+				// Store the drawing action (its raw payload)
+				c.hub.gameState.currentTurnDrawActions = append(c.hub.gameState.currentTurnDrawActions, rawDrawPayload)
+
+				drawMsgForBroadcast := Message{Type: "drawAction", Payload: rawDrawPayload}
+				drawMsgBytes, err := json.Marshal(drawMsgForBroadcast)
 				if err != nil {
-					log.Printf("Error al re-serializar DrawActionPayload enriquecido: %v", err)
+					log.Printf("Error al serializar mensaje drawAction final para broadcast: %v", err)
 					c.hub.gameState.mu.Unlock()
 					continue
 				}
 
-				// Create the final message for broadcast
-				drawMsg := Message{Type: "drawAction", Payload: enrichedPayloadBytes}
-				drawMsgBytes, err := json.Marshal(drawMsg)
-				if err != nil {
-					log.Printf("Error al serializar mensaje drawAction final: %v", err)
-					c.hub.gameState.mu.Unlock()
-					continue
-				}
+				// Unlock gameState BEFORE transmitting to avoid holding the lock during network operations.
+				c.hub.gameState.mu.Unlock()
 
 				// Broadcast to all clients (including the artist, so everyone sees the same thing)
 				c.hub.mu.Lock()
@@ -1089,8 +1118,8 @@ func (c *Client) readPump() {
 
 			} else {
 				log.Printf("Usuario %s intentó enviar drawAction pero no es el dibujante (%s) o juego no activo.", c.username, c.hub.gameState.currentDrawerUsername)
+				c.hub.gameState.mu.Unlock()
 			}
-			c.hub.gameState.mu.Unlock()
 
 		default:
 			log.Printf("Tipo de mensaje desconocido de %s: %s", c.username, msg.Type)

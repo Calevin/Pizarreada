@@ -1194,7 +1194,7 @@ func serveHome(w http.ResponseWriter, r *http.Request) {
 		}
 		exPath := filepath.Dir(ex)
 		htmlFilePath := filepath.Join(exPath, "pizarreada.html")*/
-	htmlFilePath := "../pizarreada.html"
+	htmlFilePath := "../../web/static/pizarreada.html"
 
 	log.Printf("Intentando servir archivo HTML desde: %s", htmlFilePath)
 
